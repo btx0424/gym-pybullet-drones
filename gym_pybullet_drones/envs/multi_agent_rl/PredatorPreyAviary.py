@@ -1,14 +1,16 @@
 import numpy as np
 import pybullet as p
-from gym.spaces import Box, Dict
+from gym import spaces
 from gym_pybullet_drones.envs.BaseAviary import DroneModel, Physics, BaseAviary, ActionType, ObservationType
 from gym_pybullet_drones.envs.multi_agent_rl import BaseMultiagentAviary
+from gym_pybullet_drones.utils import xyz2rpy, rpy2xyz
+from typing import Dict
 
 class PredatorPreyAviary(BaseMultiagentAviary):
     def __init__(self,
         num_predators: int=3,
         num_preys: int=1,
-        fov: float=np.pi/3,
+        fov: float=np.pi/2,
         *,
         drone_model: DroneModel=DroneModel.CF2X,
         freq: int=240,
@@ -29,7 +31,7 @@ class PredatorPreyAviary(BaseMultiagentAviary):
                          aggregate_phy_steps=aggregate_phy_steps,
                          gui=gui,
                          obs=obs,
-                         act=ActionType.PID,
+                         act=ActionType.VEL_RPY,
                          episode_len_sec=episode_len_sec)
 
     def reset(self, init_xyzs=None, init_rpys=None):
@@ -38,147 +40,125 @@ class PredatorPreyAviary(BaseMultiagentAviary):
         obs = super().reset()
         return obs
 
-    def step(self, actions):
-        assert len(actions) == self.NUM_DRONES
-        clipped_action = []
-        for i in range(self.NUM_DRONES):
-            target_pos, target_rpy = actions[i][:3], actions[i][3:]
-            rpm, _, _ = self.ctrl[i].computeControlFromState(
-                control_timestep=self.AGGR_PHY_STEPS*self.TIMESTEP,
-                state=self._getDroneStateVector(i),
-                target_pos=target_pos,
-                target_rpy=target_rpy
-            )
-            clipped_action.append(rpm)
-        clipped_action = np.stack(clipped_action)
-
-        for _ in range(self.AGGR_PHY_STEPS):
-            #### Update and store the drones kinematic info for certain
-            #### Between aggregate steps for certain types of update ###
-            if self.AGGR_PHY_STEPS > 1 and self.PHYSICS in [Physics.DYN, Physics.PYB_GND, Physics.PYB_DRAG, Physics.PYB_DW, Physics.PYB_GND_DRAG_DW]:
-                self._updateAndStoreKinematicInformation()
-            #### Step the simulation using the desired physics update ##
-            for i in range (self.NUM_DRONES):
-                if self.PHYSICS == Physics.PYB:
-                    self._physics(clipped_action[i, :], i)
-                elif self.PHYSICS == Physics.DYN:
-                    self._dynamics(clipped_action[i, :], i)
-                elif self.PHYSICS == Physics.PYB_GND:
-                    self._physics(clipped_action[i, :], i)
-                    self._groundEffect(clipped_action[i, :], i)
-                elif self.PHYSICS == Physics.PYB_DRAG:
-                    self._physics(clipped_action[i, :], i)
-                    self._drag(self.last_clipped_action[i, :], i)
-                elif self.PHYSICS == Physics.PYB_DW:
-                    self._physics(clipped_action[i, :], i)
-                    self._downwash(i)
-                elif self.PHYSICS == Physics.PYB_GND_DRAG_DW:
-                    self._physics(clipped_action[i, :], i)
-                    self._groundEffect(clipped_action[i, :], i)
-                    self._drag(self.last_clipped_action[i, :], i)
-                    self._downwash(i)
-            #### PyBullet computes the new state, unless Physics.DYN ###
-            if self.PHYSICS != Physics.DYN:
-                p.stepSimulation(physicsClientId=self.CLIENT)
-            #### Save the last applied action (e.g. to compute drag) ###
-            self.last_clipped_action = clipped_action
-        self._updateAndStoreKinematicInformation()
-        obs = self._computeObs()
-        reward = self._computeReward()
-        done = self._computeDone()
-        info = self._computeInfo()
-        self.step_counter = self.step_counter + self.AGGR_PHY_STEPS
-        return obs, reward, done, info
-
     def _computeObs(self):
         obs = super()._computeObs()
         obs = {i: np.concatenate([obs[i], obs[self.NUM_DRONES-1]]) for i in self.predators}
         return obs
 
     def _computeReward(self):
+        # TODO@Botian: add support for multiple preys...
+        assert len(self.preys) == 1
         rayFromPositions = self.pos[:len(self.predators)]
         rayToPositions = np.tile(self.pos[-1], (len(self.predators), 1))
         assert rayFromPositions.shape==rayToPositions.shape
         d = rayToPositions-rayFromPositions
-        roll, pitch, yaw = self.rpy[:-1].T
-        ori = np.stack([
-            np.cos(yaw)*np.cos(pitch),
-            np.sin(yaw)*np.cos(pitch),
-            np.sin(pitch)
-        ]).T
+        d /= np.linalg.norm(d, axis=-1, keepdims=True)
+        ori = rpy2xyz(self.rpy[:-1])
         in_fov = (d * ori).sum(1) > np.cos(self.fov/2)
-        id = np.array([hit[0] for hit in p.rayTestBatch(
+        hit_id = np.array([hit[0] for hit in p.rayTestBatch(
             rayFromPositions=rayFromPositions,
             rayToPositions=rayToPositions
         )])
-        in_sight = id & in_fov
+        in_sight = ((hit_id==self.NUM_DRONES) & in_fov).astype(float)
         reward = {}
-        reward.update({i: float(in_sight[i]) for i in self.predators})
-        reward.update({i: -float(in_sight.sum()) for i in self.preys})
+        reward.update({i: in_sight[i] for i in self.predators})
+        reward.update({i: -in_sight.sum() for i in self.preys})
         return reward
-    
-    def _actionSpace(self):
-        low = np.array([-1, -1, -1, -1, -1, -1])
-        high = np.array([1, 1, 1, 1, 1, 1])
-        return Dict({i: Box(low, high, dtype=np.float32) for i in self.predators})
-    
-    def _observationSpace(self):
-        low = -np.ones(24)
-        high = np.ones(24)
-        return Dict({i: Box(low, high, dtype=float) for i in self.predators})
 
 class PredatorAviary(PredatorPreyAviary):
     def __init__(self, 
-            num_predators: int = 3, 
-            fov: float = np.pi / 3, 
+            num_predators: int = 2, 
+            fov: float = np.pi / 2, 
             *, 
             drone_model: DroneModel = DroneModel.CF2X, 
             freq: int = 240, 
             aggregate_phy_steps: int = 1, 
             gui=False, 
-            obs: ObservationType = ObservationType.KIN, 
             episode_len_sec=5):
         self.prey = num_predators
         super().__init__(num_predators, 1, fov, 
             drone_model=drone_model, freq=freq, 
             aggregate_phy_steps=aggregate_phy_steps, 
-            gui=gui, obs=obs, episode_len_sec=episode_len_sec)
+            gui=gui, episode_len_sec=episode_len_sec)
+
+    def _observationSpace(self) -> spaces.Dict:
+        # TODO@Botian: observe teammates' states
+        low = -np.ones(20 * 2)
+        high = np.ones(20 * 2)
+        return spaces.Dict({i: spaces.Box(low, high) for i in self.predators})
 
     def reset(self, init_xyzs=None, init_rpys=None):
-        init_xyzs = self.INIT_XYZS
-        init_xyzs[-1] = np.random.random(3)
-        r = np.linalg.norm(init_xyzs[-1, :2])
-        angles = np.linspace(0, np.pi*2, 7) + np.arctan2(init_xyzs[-1, 0], init_xyzs[-1, 1])
-        self.waypoints = np.stack([
-            r * np.cos(angles),
-            r * np.sin(angles),
-            init_xyzs[-1, 2] * np.ones_like(angles)
-        ]).T
-        self.waypoint_cnt = 0
         obs = super().reset(init_xyzs, init_rpys)
-        print(self.waypoint_cnt)
+        self._setPrey()
         return {i: obs[i] for i in self.predators}
 
-    def step(self, actions):
-        target_pos = self.waypoints[self.waypoint_cnt]
-        distance = np.linalg.norm(self.pos[-1]-target_pos) 
-        if distance < 0.05:
-            self.waypoint_cnt = (self.waypoint_cnt + 1) % len(self.waypoints)
-            print(self.waypoint_cnt)
-
-        target_rpy = self.rpy[-1]
-        actions[self.prey] = np.concatenate([target_pos, target_rpy])
+    def step(self, actions: Dict[int, np.ndarray]):
+        actions[self.prey] = self._preyAction()
         return super().step(actions)
 
     def _computeReward(self):
         reward = super()._computeReward()
         return {i: reward[i] for i in self.predators}
 
+    def _computeDone(self):
+        done = super()._computeDone()
+        done.pop(self.prey)
+        return done
+
+    def _setPrey(self):
+        self.waypoints = np.array([
+            [1, 0, 0.3], 
+            [0, 1, 0.4], 
+            [-1, 0, 0.2], 
+            [0, -1, 0.3]
+        ])
+        if np.random.random() > 0.5:
+            self.waypoints = np.flipud(self.waypoints)
+        self.waypoint_cnt = 0
+    
+    def _preyAction(self):
+        waypoint = self.waypoints[self.waypoint_cnt]
+        target_vel = waypoint - self.pos[self.prey]
+        target_rpy = xyz2rpy(target_vel)
+        if np.linalg.norm(target_vel) < 0.05: self.waypoint_cnt = (self.waypoint_cnt + 1) % len(self.waypoints)
+        return np.concatenate([target_vel, target_rpy])
+
+    @staticmethod
+    def dummyPolicy(states: Dict[int, np.ndarray]):
+        actions = {}
+        for idx, state in states.items():
+            state_self, state_prey = np.split(state, 2)
+            target_vel = (state_prey[:3] - state_self[:3])
+            target_rpy = xyz2rpy(target_vel)
+            actions[idx] = np.concatenate([target_vel/np.linalg.norm(target_vel)*0.1, target_rpy])
+        return actions
+
 if __name__ == "__main__":
+    import imageio
+    import os.path as osp
+    from tqdm import tqdm
     env = PredatorAviary()
-    obs = env.reset()
-    assert env.observation_space.contains(obs), [_.shape for _ in obs.values()]
-    action = env.action_space.sample()
-    assert env.action_space.contains(action)
-    obs, _, _, _ = env.step(action)
-    assert env.observation_space.contains(obs), obs.shape
+    # obs = env.reset()
+    # assert len(env.observation_space) == len(obs)
+    # # assert env.observation_space.contains(obs)
+    # action = env.action_space.sample()
+    # assert env.action_space.contains(action)
+    # obs, _, _, _ = env.step(action)
+    # assert env.observation_space.contains(obs)
+
+    init_xyzs = env.INIT_XYZS.copy()
+    obs = env.reset(init_xyzs)
+    frames = []
+    reward_total = 0
+    for i in tqdm(range(env.MAX_STEPS)):
+        action = env.dummyPolicy(obs)
+        obs, reward, done, info = env.step(action)
+        reward_total += sum(reward.values())
+        if i % 20 == 0: frames.append(env.render()[0])
+    
+    imageio.mimsave(
+        osp.join(osp.dirname(osp.abspath(__file__)), f"test_{env.__class__.__name__}_{reward_total}.gif"),
+        ims=frames,
+        format="GIF"
+    )
+    print(reward_total)

@@ -4,12 +4,12 @@ import numpy as np
 import pybullet as p
 from gym import spaces
 from ray.rllib.env.multi_agent_env import MultiAgentEnv, ENV_STATE
-
 from gym_pybullet_drones.envs.BaseAviary import DroneModel, Physics, BaseAviary
 from gym_pybullet_drones.envs.single_agent_rl.BaseSingleAgentAviary import ActionType, ObservationType
 from gym_pybullet_drones.utils.utils import nnlsRPM
 from gym_pybullet_drones.control.DSLPIDControl import DSLPIDControl
 from gym_pybullet_drones.control.SimplePIDControl import SimplePIDControl
+from typing import Dict
 
 class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
     """Base multi-agent environment class for reinforcement learning."""
@@ -78,7 +78,7 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
         self.ACT_TYPE = ActionType(act)
         self.EPISODE_LEN_SEC = episode_len_sec
         #### Create integrated controllers #########################
-        if act in [ActionType.PID, ActionType.VEL, ActionType.ONE_D_PID]:
+        if act in [ActionType.PID, ActionType.VEL, ActionType.ONE_D_PID, ActionType.VEL_RPY]:
             os.environ['KMP_DUPLICATE_LIB_OK']='True'
             if drone_model in [DroneModel.CF2X, DroneModel.CF2P]:
                 self.ctrl = [DSLPIDControl(drone_model=DroneModel.CF2X) for i in range(num_drones)]
@@ -102,8 +102,7 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                          dynamics_attributes=dynamics_attributes
                          )
         #### Set a limit on the maximum target speed ###############
-        if act == ActionType.VEL:
-            self.SPEED_LIMIT = 0.03 * self.MAX_SPEED_KMH * (1000/3600)
+        self.SPEED_LIMIT = 0.03 * self.MAX_SPEED_KMH * (1000/3600)
         self.MAX_STEPS = self.EPISODE_LEN_SEC * self.SIM_FREQ
         self.cameras = [Camera()]
 
@@ -154,8 +153,10 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
             size = 3
         elif self.ACT_TYPE in [ActionType.ONE_D_RPM, ActionType.ONE_D_DYN, ActionType.ONE_D_PID]:
             size = 1
+        elif self.ACT_TYPE == ActionType.VEL_RPY:
+            size = 6
         else:
-            raise ValueError(f"Action type {self.ACT_TYPE} not supported.")
+            raise NotImplementedError(self.ACT_TYPE)
         return spaces.Dict({i: spaces.Box(low=-1*np.ones(size),
                                           high=np.ones(size),
                                           dtype=np.float32
@@ -163,7 +164,7 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
 
     ################################################################################
 
-    def _preprocessAction(self, action):
+    def _preprocessAction(self, action: Dict[int, np.ndarray]) -> Dict[int, np.ndarray]:
         """Pre-processes the action passed to `.step()` into motors' RPMs.
 
         Parameter `action` is processed differenly for each of the different
@@ -257,13 +258,24 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                                                         target_pos=state[0:3]+0.1*np.array([0,0,v[0]])
                                                         )
                 rpm[int(k),:] = rpm
+            elif self.ACT_TYPE == ActionType.VEL_RPY:
+                vel, rpy = v[:3], v[3:]
+                speed = np.linalg.norm(vel)
+                if speed > self.SPEED_LIMIT: vel /= speed
+                rpm[k]= self.ctrl[k].computeControlFromState(
+                    control_timestep=self.AGGR_PHY_STEPS*self.TIMESTEP, 
+                    state=self._getDroneStateVector(k),
+                    target_pos=self.pos[k],
+                    target_vel=vel,
+                    target_rpy=rpy
+                )[0]
             else:
                 raise NotImplementedError(self.ACT_TYPE)
         return rpm
 
     ################################################################################
 
-    def _observationSpace(self):
+    def _observationSpace(self) -> spaces.Dict:
         """Returns the observation space of the environment.
 
         Returns
@@ -317,7 +329,7 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
         elif self.OBS_TYPE == ObservationType.KIN: 
             ############################################################
             #### OBS OF SIZE 20 (WITH QUATERNION AND RPMS)
-            # return {   i   : self._clipAndNormalizeState(self._getDroneStateVector(i)) for i in range(self.NUM_DRONES) }
+            return {i : self._clipAndNormalizeState(self._getDroneStateVector(i)) for i in range(self.NUM_DRONES) }
             ############################################################
             #### OBS SPACE OF SIZE 12
             obs_12 = np.zeros((self.NUM_DRONES,12))
