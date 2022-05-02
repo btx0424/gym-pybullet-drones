@@ -41,8 +41,11 @@ class PredatorPreyAviary(BaseMultiagentAviary):
         return obs
 
     def _computeObs(self):
-        obs = super()._computeObs()
-        obs = {i: np.concatenate([obs[i], obs[self.NUM_DRONES-1]]) for i in self.predators}
+        states = np.stack(list(super()._computeObs().values()))
+        obs = {}
+        for i in self.predators:
+            others = np.arange(self.NUM_DRONES) != i
+            obs[i] = np.concatenate([states[others], states[i][None]])
         return obs
 
     def _computeReward(self):
@@ -63,6 +66,13 @@ class PredatorPreyAviary(BaseMultiagentAviary):
         reward = {}
         reward.update({i: in_sight[i] for i in self.predators})
         reward.update({i: -in_sight.sum() for i in self.preys})
+
+        # collision penalty
+        for drone_id in self.DRONE_IDS:
+            contact_points = p.getContactPoints(bodyA=drone_id)
+            if len(contact_points) > 0:
+                reward[drone_id-1] -= 1
+
         return reward
 
 class PredatorAviary(PredatorPreyAviary):
@@ -83,8 +93,9 @@ class PredatorAviary(PredatorPreyAviary):
 
     def _observationSpace(self) -> spaces.Dict:
         # TODO@Botian: observe teammates' states
-        low = -np.ones(20 * 2)
-        high = np.ones(20 * 2)
+        shape = (len(self.predators)+1, 20)
+        low = -np.ones(shape)-0.1
+        high = np.ones(shape)+0.1
         return spaces.Dict({i: spaces.Box(low, high) for i in self.predators})
 
     def reset(self, init_xyzs=None, init_rpys=None):
@@ -118,29 +129,36 @@ class PredatorAviary(PredatorPreyAviary):
     
     def _preyAction(self):
         waypoint = self.waypoints[self.waypoint_cnt]
+        action = np.zeros(7)
         target_vel = waypoint - self.pos[self.prey]
-        target_rpy = xyz2rpy(target_vel)
+        target_rpy = xyz2rpy(target_vel, True)
+        action[:3] = target_vel
+        action[3] = 1.
+        action[4:] = target_rpy
         if np.linalg.norm(target_vel) < 0.05: self.waypoint_cnt = (self.waypoint_cnt + 1) % len(self.waypoints)
-        return np.concatenate([target_vel, target_rpy])
+        return action
 
     @staticmethod
     def dummyPolicy(states: Dict[int, np.ndarray]):
         actions = {}
         for idx, state in states.items():
-            state_self, state_prey = np.split(state, 2)
-            target_vel = (state_prey[:3] - state_self[:3])
-            target_rpy = xyz2rpy(target_vel)
-            actions[idx] = np.concatenate([target_vel/np.linalg.norm(target_vel)*0.1, target_rpy])
+            action = np.zeros(7)
+            pos_prey, pos__self = state[-2:, :3]
+            target_vel = pos_prey - pos__self
+            target_rpy = xyz2rpy(target_vel, True)
+            action[:3] = target_vel
+            action[3] = 0.1
+            action[4:] = target_rpy
+            actions[idx] = action
         return actions
 
 if __name__ == "__main__":
     import imageio
     import os.path as osp
     from tqdm import tqdm
-    env = PredatorAviary()
+    env = PredatorAviary(aggregate_phy_steps=2, episode_len_sec=10)
     # obs = env.reset()
-    # assert len(env.observation_space) == len(obs)
-    # # assert env.observation_space.contains(obs)
+    # assert env.observation_space.contains(obs), obs
     # action = env.action_space.sample()
     # assert env.action_space.contains(action)
     # obs, _, _, _ = env.step(action)
@@ -151,7 +169,8 @@ if __name__ == "__main__":
     frames = []
     reward_total = 0
     for i in tqdm(range(env.MAX_STEPS)):
-        action = env.dummyPolicy(obs)
+        # action = env.dummyPolicy(obs)
+        action = env.action_space.sample()
         obs, reward, done, info = env.step(action)
         reward_total += sum(reward.values())
         if i % 20 == 0: frames.append(env.render()[0])

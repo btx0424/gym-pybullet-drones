@@ -11,6 +11,12 @@ from gym_pybullet_drones.control.DSLPIDControl import DSLPIDControl
 from gym_pybullet_drones.control.SimplePIDControl import SimplePIDControl
 from typing import Dict
 
+MAX_LIN_VEL_XY = 3 
+MAX_LIN_VEL_Z = 1
+
+MAX_PITCH_ROLL = np.pi # Full range
+MAX_RPY = np.array([np.pi, np.pi/2, np.pi])
+
 class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
     """Base multi-agent environment class for reinforcement learning."""
     
@@ -29,6 +35,7 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                  obs: ObservationType=ObservationType.KIN,
                  act: ActionType=ActionType.RPM,
                  episode_len_sec=5,
+                 max_xyz=[5, 5, 2]
                  ):
         """Initialization of a generic multi-agent RL environment.
 
@@ -77,6 +84,8 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
         self.OBS_TYPE = obs
         self.ACT_TYPE = ActionType(act)
         self.EPISODE_LEN_SEC = episode_len_sec
+        self.MAX_XYZ = np.array(max_xyz)
+        self.MIN_XYZ = -np.array(max_xyz[:2]+[0])
         #### Create integrated controllers #########################
         if act in [ActionType.PID, ActionType.VEL, ActionType.ONE_D_PID, ActionType.VEL_RPY]:
             os.environ['KMP_DUPLICATE_LIB_OK']='True'
@@ -103,7 +112,7 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                          )
         #### Set a limit on the maximum target speed ###############
         self.SPEED_LIMIT = 0.03 * self.MAX_SPEED_KMH * (1000/3600)
-        self.MAX_STEPS = self.EPISODE_LEN_SEC * self.SIM_FREQ
+        self.MAX_STEPS = int(self.EPISODE_LEN_SEC * self.SIM_FREQ / self.AGGR_PHY_STEPS)
         self.cameras = [Camera()]
 
     def _addObstacles(self):
@@ -154,7 +163,7 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
         elif self.ACT_TYPE in [ActionType.ONE_D_RPM, ActionType.ONE_D_DYN, ActionType.ONE_D_PID]:
             size = 1
         elif self.ACT_TYPE == ActionType.VEL_RPY:
-            size = 6
+            size = 7
         else:
             raise NotImplementedError(self.ACT_TYPE)
         return spaces.Dict({i: spaces.Box(low=-1*np.ones(size),
@@ -250,24 +259,22 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                                         )
             elif self.ACT_TYPE == ActionType.ONE_D_PID:
                 state = self._getDroneStateVector(int(k))
-                rpm, _, _ = self.ctrl[k].computeControl(control_timestep=self.AGGR_PHY_STEPS*self.TIMESTEP, 
+                rpm[k,:] = self.ctrl[k].computeControl(control_timestep=self.AGGR_PHY_STEPS*self.TIMESTEP, 
                                                         cur_pos=state[0:3],
                                                         cur_quat=state[3:7],
                                                         cur_vel=state[10:13],
                                                         cur_ang_vel=state[13:16],
                                                         target_pos=state[0:3]+0.1*np.array([0,0,v[0]])
-                                                        )
-                rpm[int(k),:] = rpm
+                                                        )[0]
             elif self.ACT_TYPE == ActionType.VEL_RPY:
-                vel, rpy = v[:3], v[3:]
-                speed = np.linalg.norm(vel)
-                if speed > self.SPEED_LIMIT: vel /= speed
+                vel_d, speed, rpy = v[:3], v[3], v[4:]
+                vel_d = vel_d / (np.linalg.norm(vel_d)+1e-6)
                 rpm[k]= self.ctrl[k].computeControlFromState(
                     control_timestep=self.AGGR_PHY_STEPS*self.TIMESTEP, 
                     state=self._getDroneStateVector(k),
                     target_pos=self.pos[k],
-                    target_vel=vel,
-                    target_rpy=rpy
+                    target_vel= vel_d * np.abs(speed) * self.SPEED_LIMIT * 3,
+                    target_rpy=rpy * MAX_RPY
                 )[0]
             else:
                 raise NotImplementedError(self.ACT_TYPE)
@@ -352,30 +359,19 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
             Array containing the non-normalized state of a single drone.
 
         """
-        MAX_LIN_VEL_XY = 3 
-        MAX_LIN_VEL_Z = 1
-
-        MAX_XY = MAX_LIN_VEL_XY*self.EPISODE_LEN_SEC
-        MAX_Z = MAX_LIN_VEL_Z*self.EPISODE_LEN_SEC
-
-        MAX_PITCH_ROLL = np.pi # Full range
-
-        clipped_pos_xy = np.clip(state[0:2], -MAX_XY, MAX_XY)
-        clipped_pos_z = np.clip(state[2], 0, MAX_Z)
+        clipped_pos_xyz = np.clip(state[:3], self.MIN_XYZ, self.MAX_XYZ)
         clipped_rp = np.clip(state[7:9], -MAX_PITCH_ROLL, MAX_PITCH_ROLL)
         clipped_vel_xy = np.clip(state[10:12], -MAX_LIN_VEL_XY, MAX_LIN_VEL_XY)
         clipped_vel_z = np.clip(state[12], -MAX_LIN_VEL_Z, MAX_LIN_VEL_Z)
 
-        normalized_pos_xy = clipped_pos_xy / MAX_XY
-        normalized_pos_z = clipped_pos_z / MAX_Z
+        normalized_pos_xyz = clipped_pos_xyz / self.MAX_XYZ
         normalized_rp = clipped_rp / MAX_PITCH_ROLL
         normalized_y = state[9] / np.pi # No reason to clip
         normalized_vel_xy = clipped_vel_xy / MAX_LIN_VEL_XY
         normalized_vel_z = clipped_vel_z / MAX_LIN_VEL_XY
         normalized_ang_vel = state[13:16]/np.linalg.norm(state[13:16]) if np.linalg.norm(state[13:16]) != 0 else state[13:16]
 
-        norm_and_clipped = np.hstack([normalized_pos_xy,
-                                      normalized_pos_z,
+        norm_and_clipped = np.hstack([normalized_pos_xyz,
                                       state[3:7],
                                       normalized_rp,
                                       normalized_y,
