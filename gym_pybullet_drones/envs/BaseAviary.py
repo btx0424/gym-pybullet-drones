@@ -404,7 +404,7 @@ class BaseAviary(gym.Env):
         done = self._computeDone()
         info = self._computeInfo()
         #### Advance the step counter ##############################
-        self.step_counter = self.step_counter + (1 * self.AGGR_PHY_STEPS)
+        self.step_counter = self.step_counter + self.AGGR_PHY_STEPS
         return obs, reward, done, info
     
     ################################################################################

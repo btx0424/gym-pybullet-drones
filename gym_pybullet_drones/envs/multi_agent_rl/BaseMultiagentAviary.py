@@ -166,10 +166,10 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
             size = 7
         else:
             raise NotImplementedError(self.ACT_TYPE)
-        return spaces.Dict({i: spaces.Box(low=-1*np.ones(size),
-                                          high=np.ones(size),
-                                          dtype=np.float32
-                                          ) for i in range(self.NUM_DRONES)})
+        dtype = np.float32
+        low = -np.ones(size, dtype)
+        high = np.ones(size, dtype)
+        return spaces.Dict({i: spaces.Box(low, high, dtype=dtype) for i in range(self.NUM_DRONES)})
 
     ################################################################################
 
@@ -383,13 +383,14 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
 
         return norm_and_clipped
     
-    def _computeReward(self):
-        return {i:0 for i in range(self.NUM_DRONES)}
+    def _computeReward(self) -> np.array:
+        return np.zeros(self.NUM_DRONES)
 
     def _computeDone(self):
-        bool_val = True if self.step_counter > self.MAX_STEPS else False
-        done = {i: bool_val for i in range(self.NUM_DRONES)}
-        done["__all__"] = True if True in done.values() else False
+        if self.step_counter >= self.MAX_STEPS * self.AGGR_PHY_STEPS:
+            done = np.ones(self.NUM_DRONES, dtype=bool)
+        else:
+            done = np.zeros(self.NUM_DRONES, dtype=bool)
         return done
     
     def _computeInfo(self):
