@@ -297,26 +297,29 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                                               high=255,
                                               shape=(self.IMG_RES[1], self.IMG_RES[0], 4), dtype=np.uint8
                                               ) for i in range(self.NUM_DRONES)})
-        elif self.OBS_TYPE == ObservationType.KIN:
+        elif self.OBS_TYPE == ObservationType.KIN20:
             ############################################################
             #### OBS OF SIZE 20 (WITH QUATERNION AND RPMS)
             #### Observation vector ### X        Y        Z       Q1   Q2   Q3   Q4   R       P       Y       VX       VY       VZ       WX       WY       WZ       P0            P1            P2            P3
-            dtype = np.float32
             obs_lower_bound = np.array([-1,      -1,      0,      -1,  -1,  -1,  -1,  -1,     -1,     -1,     -1,      -1,      -1,      -1,      -1,      -1,      -1,           -1,           -1,           -1], dtype)
             obs_upper_bound = np.array([1,       1,       1,      1,   1,   1,   1,   1,      1,      1,      1,       1,       1,       1,       1,       1,       1,            1,            1,            1], dtype)          
-            return spaces.Dict({i: spaces.Box(low=obs_lower_bound, high=obs_upper_bound, dtype=dtype)
-                for i in range(self.NUM_DRONES)})
+            return spaces.Dict({i: spaces.Box(low=obs_lower_bound, high=obs_upper_bound, dtype=np.float32) for i in range(self.NUM_DRONES)})
             ############################################################
             #### OBS SPACE OF SIZE 12
-            # return spaces.Dict({i: spaces.Box(low=np.array([-1,-1,0, -1,-1,-1, -1,-1,-1, -1,-1,-1]),
-            #                                   high=np.array([1,1,1, 1,1,1, 1,1,1, 1,1,1]),
-            #                                   dtype=np.float32
-            #                                   ) for i in range(self.NUM_DRONES)})
+        elif self.OBS_TYPE == ObservationType.KIN or self.OBS_TYPE == ObservationType.KIN12:
+            obs_lower_bound = np.array([-1,-1,0, -1,-1,-1, -1,-1,-1, -1,-1,-1])
+            obs_upper_bound = np.array([1,1,1, 1,1,1, 1,1,1, 1,1,1])
+            return spaces.Dict({i: spaces.Box(low=obs_lower_bound, high=obs_upper_bound, dtype=np.float32) for i in range(self.NUM_DRONES)})
             ############################################################
         else:
             raise NotImplementedError(self.OBS_TYPE)
     
     ################################################################################
+    
+    @property
+    def single_obs_size(self):
+        if self.OBS_TYPE == ObservationType.KIN: return 12
+        elif self.OBS_TYPE == ObservationType.KIN20: return 20
 
     def _computeObs(self):
         """Returns the current observation of the environment.
@@ -333,12 +336,13 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                 for i in range(self.NUM_DRONES):
                     self.rgb[i], self.dep[i], self.seg[i] = self._getDroneImages(i, segmentation=False)
             return {i: self.rgb[i] for i in range(self.NUM_DRONES)}
-        elif self.OBS_TYPE == ObservationType.KIN: 
+        elif self.OBS_TYPE == ObservationType.KIN20: 
             ############################################################
             #### OBS OF SIZE 20 (WITH QUATERNION AND RPMS)
             return {i : self._clipAndNormalizeState(self._getDroneStateVector(i)) for i in range(self.NUM_DRONES) }
             ############################################################
             #### OBS SPACE OF SIZE 12
+        elif self.OBS_TYPE == ObservationType.KIN12:
             obs_12 = np.zeros((self.NUM_DRONES,12))
             for i in range(self.NUM_DRONES):
                 obs = self._clipAndNormalizeState(self._getDroneStateVector(i))
@@ -351,20 +355,11 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
     ################################################################################
 
     def _clipAndNormalizeState(self, state):
-        """Normalizes a drone's state to the [-1,1] range.
-
-        Parameters
-        ----------
-        state : ndarray
-            Array containing the non-normalized state of a single drone.
-
-        """
-        clipped_pos_xyz = np.clip(state[:3], self.MIN_XYZ, self.MAX_XYZ)
         clipped_rp = np.clip(state[7:9], -MAX_PITCH_ROLL, MAX_PITCH_ROLL)
         clipped_vel_xy = np.clip(state[10:12], -MAX_LIN_VEL_XY, MAX_LIN_VEL_XY)
         clipped_vel_z = np.clip(state[12], -MAX_LIN_VEL_Z, MAX_LIN_VEL_Z)
 
-        normalized_pos_xyz = clipped_pos_xyz / self.MAX_XYZ
+        normalized_pos_xyz, clipped = self._clipAndNormalizeXYZ(state[:3])
         normalized_rp = clipped_rp / MAX_PITCH_ROLL
         normalized_y = state[9] / np.pi # No reason to clip
         normalized_vel_xy = clipped_vel_xy / MAX_LIN_VEL_XY
@@ -380,9 +375,12 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                                       normalized_ang_vel,
                                       state[16:20]
                                       ]).reshape(20,)
-
         return norm_and_clipped
     
+    def _clipAndNormalizeXYZ(self, xyz):
+        clipped_xyz = np.clip(xyz, self.MIN_XYZ, self.MAX_XYZ)
+        return  clipped_xyz / self.MAX_XYZ, np.any(clipped_xyz!=xyz)
+
     def _computeReward(self) -> np.array:
         return np.zeros(self.NUM_DRONES)
 
