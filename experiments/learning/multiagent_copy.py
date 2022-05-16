@@ -19,6 +19,7 @@ from gym_pybullet_drones.envs.multi_agent_rl.NavigationAviary import NavigationA
 from gym_pybullet_drones.envs.single_agent_rl.BaseSingleAgentAviary import ActionType, ObservationType
 
 AGGR_PHY_STEPS = 5
+
 ENV_CLS = {
     "flock": FlockAviary,
     "leaderfollower": LeaderFollowerAviary,
