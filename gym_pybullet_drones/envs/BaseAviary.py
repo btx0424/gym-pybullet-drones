@@ -44,6 +44,27 @@ class ImageType(Enum):
 
 ################################################################################
 
+class ActionType(Enum):
+    """Action type enumeration class."""
+    RPM = "rpm"                 # RPMS
+    DYN = "dyn"                 # Desired thrust and torques
+    PID = "pid"                 # PID control
+    VEL = "vel"                 # Velocity input (using PID control)
+    TUN = "tun"                 # Tune the coefficients of a PID controller
+    ONE_D_RPM = "one_d_rpm"     # 1D (identical input to all motors) with RPMs
+    ONE_D_DYN = "one_d_dyn"     # 1D (identical input to all motors) with desired thrust and torques
+    ONE_D_PID = "one_d_pid"     # 1D (identical input to all motors) with PID control
+    VEL_RPY = "vel_rpy"
+
+################################################################################
+
+class ObservationType(Enum):
+    """Observation type enumeration class."""
+    KIN20 = "kin20"     # Kinematic information (pose, linear and angular velocities)
+    KIN = KIN12 = "kin12"
+    RGB = "rgb"     # RGB camera capture in each drone's POV
+    RGBD = "rgbd"
+
 RECORD_PATH = os.path.dirname(os.path.abspath(__file__))+"/../../files/videos/"
 
 class BaseAviary(gym.Env):
@@ -120,7 +141,7 @@ class BaseAviary(gym.Env):
         self.DRONE_MODEL = drone_model
         self.GUI = gui
         self.RECORD = record
-        self.RECORD_PATH = record_path or RECORD_PATH
+        self.RECORD_PATH = RECORD_PATH
         self.PHYSICS = physics
         self.OBSTACLES = obstacles
         self.USER_DEBUG = user_debug_gui
@@ -159,10 +180,11 @@ class BaseAviary(gym.Env):
         self.GND_EFF_H_CLIP = 0.25 * self.PROP_RADIUS * np.sqrt((15 * self.MAX_RPM**2 * self.KF * self.GND_EFF_COEFF) / self.MAX_THRUST)
         #### Create attributes for vision tasks ####################
         self.VISION_ATTR = vision_attributes
+        self.IMG_RES = camera_config.get("res", (64, 48))
+        self.FOV = camera_config.get("fov", 90)
+        self.IMG_FRAME_PER_SEC = 24
+        self.IMG_CAPTURE_FREQ = int(self.SIM_FREQ/self.IMG_FRAME_PER_SEC)
         if self.VISION_ATTR:
-            self.IMG_RES = camera_config.get("res", (64, 48))
-            self.IMG_FRAME_PER_SEC = 24
-            self.IMG_CAPTURE_FREQ = int(self.SIM_FREQ/self.IMG_FRAME_PER_SEC)
             self.rgb = np.zeros(((self.NUM_DRONES, self.IMG_RES[1], self.IMG_RES[0], 4)))
             self.dep = np.ones(((self.NUM_DRONES, self.IMG_RES[1], self.IMG_RES[0])))
             self.seg = np.zeros(((self.NUM_DRONES, self.IMG_RES[1], self.IMG_RES[0])))
@@ -276,9 +298,7 @@ class BaseAviary(gym.Env):
     
     ################################################################################
 
-    def step(self,
-             action
-             ):
+    def step(self, action):
         """Advances the environment by one simulation step.
 
         Parameters
@@ -386,7 +406,7 @@ class BaseAviary(gym.Env):
         done = self._computeDone()
         info = self._computeInfo()
         #### Advance the step counter ##############################
-        self.step_counter = self.step_counter + (1 * self.AGGR_PHY_STEPS)
+        self.step_counter = self.step_counter + self.AGGR_PHY_STEPS
         return obs, reward, done, info
     
     ################################################################################

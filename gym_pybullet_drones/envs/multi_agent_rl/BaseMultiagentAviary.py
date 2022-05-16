@@ -4,12 +4,18 @@ import numpy as np
 import pybullet as p
 from gym import spaces
 from ray.rllib.env.multi_agent_env import MultiAgentEnv, ENV_STATE
-
 from gym_pybullet_drones.envs.BaseAviary import DroneModel, Physics, BaseAviary
 from gym_pybullet_drones.envs.single_agent_rl.BaseSingleAgentAviary import ActionType, ObservationType
 from gym_pybullet_drones.utils.utils import nnlsRPM
 from gym_pybullet_drones.control.DSLPIDControl import DSLPIDControl
 from gym_pybullet_drones.control.SimplePIDControl import SimplePIDControl
+from typing import Dict
+
+MAX_LIN_VEL_XY = 3 
+MAX_LIN_VEL_Z = 1
+
+MAX_PITCH_ROLL = np.pi # Full range
+MAX_RPY = np.array([np.pi, np.pi/2, np.pi])
 
 class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
     """Base multi-agent environment class for reinforcement learning."""
@@ -26,10 +32,10 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                  freq: int=240,
                  aggregate_phy_steps: int=1,
                  gui=False,
-                 record=False, 
-                 record_path=None,
                  obs: ObservationType=ObservationType.KIN,
-                 act: ActionType=ActionType.RPM
+                 act: ActionType=ActionType.RPM,
+                 episode_len_sec=5,
+                 max_xyz=[5, 5, 2]
                  ):
         """Initialization of a generic multi-agent RL environment.
 
@@ -76,10 +82,12 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
         vision_attributes = True if obs == ObservationType.RGB else False
         dynamics_attributes = True if act in [ActionType.DYN, ActionType.ONE_D_DYN] else False
         self.OBS_TYPE = obs
-        self.ACT_TYPE = act
-        self.EPISODE_LEN_SEC = 5
+        self.ACT_TYPE = ActionType(act)
+        self.EPISODE_LEN_SEC = episode_len_sec
+        self.MAX_XYZ = np.array(max_xyz)
+        self.MIN_XYZ = -np.array(max_xyz[:2]+[0])
         #### Create integrated controllers #########################
-        if act in [ActionType.PID, ActionType.VEL, ActionType.ONE_D_PID]:
+        if act in [ActionType.PID, ActionType.VEL, ActionType.ONE_D_PID, ActionType.VEL_RPY]:
             os.environ['KMP_DUPLICATE_LIB_OK']='True'
             if drone_model in [DroneModel.CF2X, DroneModel.CF2P]:
                 self.ctrl = [DSLPIDControl(drone_model=DroneModel.CF2X) for i in range(num_drones)]
@@ -96,17 +104,16 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                          freq=freq,
                          aggregate_phy_steps=aggregate_phy_steps,
                          gui=gui,
-                         record=record, record_path=record_path,
+                         record=False,
                          obstacles=True, # Add obstacles for RGB observations and/or FlyThruGate
                          user_debug_gui=False, # Remove of RPM sliders from all single agent learning aviaries
                          vision_attributes=vision_attributes,
                          dynamics_attributes=dynamics_attributes
                          )
         #### Set a limit on the maximum target speed ###############
-        if act == ActionType.VEL:
-            self.SPEED_LIMIT = 0.03 * self.MAX_SPEED_KMH * (1000/3600)
-
-    ################################################################################
+        self.SPEED_LIMIT = 0.03 * self.MAX_SPEED_KMH * (1000/3600)
+        self.MAX_STEPS = int(self.EPISODE_LEN_SEC * self.SIM_FREQ / self.AGGR_PHY_STEPS)
+        self.cameras = [Camera()]
 
     def _addObstacles(self):
         """Add obstacles to the environment.
@@ -115,29 +122,27 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
         Overrides BaseAviary's method.
 
         """
-        if self.OBS_TYPE == ObservationType.RGB:
-            p.loadURDF("block.urdf",
-                       [1, 0, .1],
-                       p.getQuaternionFromEuler([0, 0, 0]),
-                       physicsClientId=self.CLIENT
-                       )
-            p.loadURDF("cube_small.urdf",
-                       [0, 1, .1],
-                       p.getQuaternionFromEuler([0, 0, 0]),
-                       physicsClientId=self.CLIENT
-                       )
-            p.loadURDF("duck_vhacd.urdf",
-                       [-1, 0, .1],
-                       p.getQuaternionFromEuler([0, 0, 0]),
-                       physicsClientId=self.CLIENT
-                       )
-            p.loadURDF("teddy_vhacd.urdf",
-                       [0, -1, .1],
-                       p.getQuaternionFromEuler([0, 0, 0]),
-                       physicsClientId=self.CLIENT
-                       )
-        else:
-            pass
+        p.loadURDF("block.urdf",
+                    [1, 0, .1],
+                    p.getQuaternionFromEuler([0, 0, 0]),
+                    physicsClientId=self.CLIENT
+                    )
+        p.loadURDF("cube_small.urdf",
+                    [0, 1, .1],
+                    p.getQuaternionFromEuler([0, 0, 0]),
+                    physicsClientId=self.CLIENT
+                    )
+        p.loadURDF("duck_vhacd.urdf",
+                    [-1, 0, .1],
+                    p.getQuaternionFromEuler([0, 0, 0]),
+                    physicsClientId=self.CLIENT
+                    )
+        p.loadURDF("teddy_vhacd.urdf",
+                    [0, -1, .1],
+                    p.getQuaternionFromEuler([0, 0, 0]),
+                    physicsClientId=self.CLIENT
+                    )
+        
 
     ################################################################################
 
@@ -157,18 +162,18 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
             size = 3
         elif self.ACT_TYPE in [ActionType.ONE_D_RPM, ActionType.ONE_D_DYN, ActionType.ONE_D_PID]:
             size = 1
+        elif self.ACT_TYPE == ActionType.VEL_RPY:
+            size = 7
         else:
-            raise ValueError(f"Action type {self.ACT_TYPE} not supported.")
-        return spaces.Dict({i: spaces.Box(low=-1*np.ones(size),
-                                          high=np.ones(size),
-                                          dtype=np.float32
-                                          ) for i in range(self.NUM_DRONES)})
+            raise NotImplementedError(self.ACT_TYPE)
+        dtype = np.float32
+        low = -np.ones(size, dtype)
+        high = np.ones(size, dtype)
+        return spaces.Dict({i: spaces.Box(low, high, dtype=dtype) for i in range(self.NUM_DRONES)})
 
     ################################################################################
 
-    def _preprocessAction(self,
-                          action
-                          ):
+    def _preprocessAction(self, action: Dict[int, np.ndarray]) -> Dict[int, np.ndarray]:
         """Pre-processes the action passed to `.step()` into motors' RPMs.
 
         Parameter `action` is processed differenly for each of the different
@@ -183,9 +188,8 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
 
         Parameters
         ----------
-        action : dict[str, ndarray]
+        action : dict[int, ndarray]
             The input action for each drone, to be translated into RPMs.
-
         Returns
         -------
         ndarray
@@ -255,22 +259,30 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                                         )
             elif self.ACT_TYPE == ActionType.ONE_D_PID:
                 state = self._getDroneStateVector(int(k))
-                rpm, _, _ = self.ctrl[k].computeControl(control_timestep=self.AGGR_PHY_STEPS*self.TIMESTEP, 
+                rpm[k,:] = self.ctrl[k].computeControl(control_timestep=self.AGGR_PHY_STEPS*self.TIMESTEP, 
                                                         cur_pos=state[0:3],
                                                         cur_quat=state[3:7],
                                                         cur_vel=state[10:13],
                                                         cur_ang_vel=state[13:16],
                                                         target_pos=state[0:3]+0.1*np.array([0,0,v[0]])
-                                                        )
-                rpm[int(k),:] = rpm
+                                                        )[0]
+            elif self.ACT_TYPE == ActionType.VEL_RPY:
+                vel_d, speed, rpy = v[:3], v[3], v[4:]
+                vel_d = vel_d / (np.linalg.norm(vel_d)+1e-6)
+                rpm[k]= self.ctrl[k].computeControlFromState(
+                    control_timestep=self.AGGR_PHY_STEPS*self.TIMESTEP, 
+                    state=self._getDroneStateVector(k),
+                    target_pos=self.pos[k],
+                    target_vel= vel_d * np.abs(speed) * self.SPEED_LIMIT * 3,
+                    target_rpy=rpy * MAX_RPY
+                )[0]
             else:
-                print("[ERROR] in BaseMultiagentAviary._preprocessAction()")
-                exit()
+                raise NotImplementedError(self.ACT_TYPE)
         return rpm
 
     ################################################################################
 
-    def _observationSpace(self):
+    def _observationSpace(self) -> spaces.Dict:
         """Returns the observation space of the environment.
 
         Returns
@@ -285,26 +297,29 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                                               high=255,
                                               shape=(self.IMG_RES[1], self.IMG_RES[0], 4), dtype=np.uint8
                                               ) for i in range(self.NUM_DRONES)})
-        elif self.OBS_TYPE == ObservationType.KIN:
+        elif self.OBS_TYPE == ObservationType.KIN20:
             ############################################################
             #### OBS OF SIZE 20 (WITH QUATERNION AND RPMS)
             #### Observation vector ### X        Y        Z       Q1   Q2   Q3   Q4   R       P       Y       VX       VY       VZ       WX       WY       WZ       P0            P1            P2            P3
-            dtype = np.float32
             obs_lower_bound = np.array([-1,      -1,      0,      -1,  -1,  -1,  -1,  -1,     -1,     -1,     -1,      -1,      -1,      -1,      -1,      -1,      -1,           -1,           -1,           -1], dtype)
             obs_upper_bound = np.array([1,       1,       1,      1,   1,   1,   1,   1,      1,      1,      1,       1,       1,       1,       1,       1,       1,            1,            1,            1], dtype)          
-            return spaces.Dict({i: spaces.Box(low=obs_lower_bound, high=obs_upper_bound, dtype=dtype)
-                for i in range(self.NUM_DRONES)})
+            return spaces.Dict({i: spaces.Box(low=obs_lower_bound, high=obs_upper_bound, dtype=np.float32) for i in range(self.NUM_DRONES)})
             ############################################################
             #### OBS SPACE OF SIZE 12
-            # return spaces.Dict({i: spaces.Box(low=np.array([-1,-1,0, -1,-1,-1, -1,-1,-1, -1,-1,-1]),
-            #                                   high=np.array([1,1,1, 1,1,1, 1,1,1, 1,1,1]),
-            #                                   dtype=np.float32
-            #                                   ) for i in range(self.NUM_DRONES)})
+        elif self.OBS_TYPE == ObservationType.KIN or self.OBS_TYPE == ObservationType.KIN12:
+            obs_lower_bound = np.array([-1,-1,0, -1,-1,-1, -1,-1,-1, -1,-1,-1])
+            obs_upper_bound = np.array([1,1,1, 1,1,1, 1,1,1, 1,1,1])
+            return spaces.Dict({i: spaces.Box(low=obs_lower_bound, high=obs_upper_bound, dtype=np.float32) for i in range(self.NUM_DRONES)})
             ############################################################
         else:
-            print("[ERROR] in BaseMultiagentAviary._observationSpace()")
+            raise NotImplementedError(self.OBS_TYPE)
     
     ################################################################################
+    
+    @property
+    def single_obs_size(self):
+        if self.OBS_TYPE == ObservationType.KIN: return 12
+        elif self.OBS_TYPE == ObservationType.KIN20: return 20
 
     def _computeObs(self):
         """Returns the current observation of the environment.
@@ -319,23 +334,15 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
         if self.OBS_TYPE == ObservationType.RGB:
             if self.step_counter%self.IMG_CAPTURE_FREQ == 0: 
                 for i in range(self.NUM_DRONES):
-                    self.rgb[i], self.dep[i], self.seg[i] = self._getDroneImages(i,
-                                                                                 segmentation=False
-                                                                                 )
-                    #### Printing observation to PNG frames example ############
-                    if self.RECORD:
-                        self._exportImage(img_type=ImageType.RGB,
-                                          img_input=self.rgb[i],
-                                          path=self.ONBOARD_IMG_PATH+"drone_"+str(i),
-                                          frame_num=int(self.step_counter/self.IMG_CAPTURE_FREQ)
-                                          )
+                    self.rgb[i], self.dep[i], self.seg[i] = self._getDroneImages(i, segmentation=False)
             return {i: self.rgb[i] for i in range(self.NUM_DRONES)}
-        elif self.OBS_TYPE == ObservationType.KIN: 
+        elif self.OBS_TYPE == ObservationType.KIN20: 
             ############################################################
             #### OBS OF SIZE 20 (WITH QUATERNION AND RPMS)
-            # return {   i   : self._clipAndNormalizeState(self._getDroneStateVector(i)) for i in range(self.NUM_DRONES) }
+            return {i : self._clipAndNormalizeState(self._getDroneStateVector(i)) for i in range(self.NUM_DRONES) }
             ############################################################
             #### OBS SPACE OF SIZE 12
+        elif self.OBS_TYPE == ObservationType.KIN12:
             obs_12 = np.zeros((self.NUM_DRONES,12))
             for i in range(self.NUM_DRONES):
                 obs = self._clipAndNormalizeState(self._getDroneStateVector(i))
@@ -343,21 +350,89 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
             return {i: obs_12[i, :] for i in range(self.NUM_DRONES)}
             ############################################################
         else:
-            print("[ERROR] in BaseMultiagentAviary._computeObs()")
+            raise NotImplementedError(self.OBS_TYPE)
 
     ################################################################################
 
-    def _clipAndNormalizeState(self,
-                               state
-                               ):
-        """Normalizes a drone's state to the [-1,1] range.
+    def _clipAndNormalizeState(self, state):
+        clipped_rp = np.clip(state[7:9], -MAX_PITCH_ROLL, MAX_PITCH_ROLL)
+        clipped_vel_xy = np.clip(state[10:12], -MAX_LIN_VEL_XY, MAX_LIN_VEL_XY)
+        clipped_vel_z = np.clip(state[12], -MAX_LIN_VEL_Z, MAX_LIN_VEL_Z)
 
-        Must be implemented in a subclass.
+        normalized_pos_xyz, clipped = self._clipAndNormalizeXYZ(state[:3])
+        normalized_rp = clipped_rp / MAX_PITCH_ROLL
+        normalized_y = state[9] / np.pi # No reason to clip
+        normalized_vel_xy = clipped_vel_xy / MAX_LIN_VEL_XY
+        normalized_vel_z = clipped_vel_z / MAX_LIN_VEL_XY
+        normalized_ang_vel = state[13:16]/np.linalg.norm(state[13:16]) if np.linalg.norm(state[13:16]) != 0 else state[13:16]
 
-        Parameters
-        ----------
-        state : ndarray
-            Array containing the non-normalized state of a single drone.
+        norm_and_clipped = np.hstack([normalized_pos_xyz,
+                                      state[3:7],
+                                      normalized_rp,
+                                      normalized_y,
+                                      normalized_vel_xy,
+                                      normalized_vel_z,
+                                      normalized_ang_vel,
+                                      state[16:20]
+                                      ]).reshape(20,)
+        return norm_and_clipped
+    
+    def _clipAndNormalizeXYZ(self, xyz):
+        clipped_xyz = np.clip(xyz, self.MIN_XYZ, self.MAX_XYZ)
+        return  clipped_xyz / self.MAX_XYZ, np.any(clipped_xyz!=xyz)
 
-        """
-        raise NotImplementedError
+    def _computeReward(self) -> np.array:
+        return np.zeros(self.NUM_DRONES)
+
+    def _computeDone(self):
+        if self.step_counter >= self.MAX_STEPS * self.AGGR_PHY_STEPS:
+            done = np.ones(self.NUM_DRONES, dtype=bool)
+        else:
+            done = np.zeros(self.NUM_DRONES, dtype=bool)
+        return done
+    
+    def _computeInfo(self):
+        return {i:{} for i in range(self.NUM_DRONES)}
+
+    def add_camera(self, camera):
+        self.cameras.append(camera)
+
+    def render(self, *args, **kwargs):
+        images = [cam._get_image(self.CLIENT) for cam in self.cameras]
+        return images
+    
+class Camera:
+    CAMERA_COUNT = 0
+    def __init__(self, 
+        width=640, height=480, fov=60,
+        eye_pos=[-1.5, -1.5, 1.5], target_pos=[0, 0, 0.2], up=[0, 0, 1], name=None):
+        if name is None:
+            name = f"cam_{Camera.CAMERA_COUNT}"
+            Camera.CAMERA_COUNT += 1
+        self.name = name
+        self.width = width
+        self.height = height
+        self.fov = fov
+        self.view_matrix = p.computeViewMatrix(
+            cameraEyePosition=eye_pos,
+            cameraTargetPosition=target_pos,
+            cameraUpVector=up
+        )
+        self.projection_matrix = p.computeProjectionMatrixFOV(
+            fov=fov,
+            aspect=width/height,
+            nearVal=0.1,
+            farVal=1000.
+        )
+
+    def _get_image(self, client):
+        w, h, rgb, dep, seg = p.getCameraImage(
+            width=self.width, height=self.height,
+            shadow=1,
+            viewMatrix=self.view_matrix,
+            projectionMatrix=self.projection_matrix,
+            renderer=p.ER_TINY_RENDERER,
+            flags=p.ER_NO_SEGMENTATION_MASK,
+            physicsClientId=client
+        )
+        return rgb

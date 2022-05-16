@@ -51,9 +51,9 @@ from gym_pybullet_drones.envs.single_agent_rl.FlyThruGateAviary import FlyThruGa
 from gym_pybullet_drones.envs.single_agent_rl.TuneAviary import TuneAviary
 from gym_pybullet_drones.envs.single_agent_rl.BaseSingleAgentAviary import ActionType, ObservationType
 
-import shared_constants
+AGGREGATE_PHY_STEPS = 1
 
-EPISODE_REWARD_THRESHOLD = -0 # Upperbound: rewards are always negative, but non-zero
+EPISODE_REWARD_THRESHOLD = 2 # Upperbound: rewards are always negative, but non-zero
 """float: Reward threshold to halt the script."""
 
 if __name__ == "__main__":
@@ -68,7 +68,12 @@ if __name__ == "__main__":
     ARGS = parser.parse_args()
 
     #### Save directory ########################################
-    filename = os.path.dirname(os.path.abspath(__file__))+'/results/save-'+ARGS.env+'-'+ARGS.algo+'-'+ARGS.obs.value+'-'+ARGS.act.value+'-'+datetime.now().strftime("%m.%d.%Y_%H.%M.%S")
+    n_steps = 2048
+    batch_size = n_steps//32
+    filename = os.path.dirname(os.path.abspath(__file__))\
+        +'/results/save-'+ARGS.env+'-'+ARGS.algo+'-'+ARGS.obs.value+'-'+ARGS.act.value+'-'+datetime.now().strftime("%m.%d.%Y_%H.%M.%S")\
+        +f'-{n_steps}-{batch_size}'
+    
     if not os.path.exists(filename):
         os.makedirs(filename+'/')
 
@@ -98,7 +103,7 @@ if __name__ == "__main__":
     # exit()
 
     env_name = ARGS.env+"-aviary-v0"
-    sa_env_kwargs = dict(aggregate_phy_steps=shared_constants.AGGR_PHY_STEPS, obs=ARGS.obs, act=ARGS.act)
+    sa_env_kwargs = dict(aggregate_phy_steps=AGGREGATE_PHY_STEPS, obs=ARGS.obs, act=ARGS.act)
     # train_env = gym.make(env_name, aggregate_phy_steps=shared_constants.AGGR_PHY_STEPS, obs=ARGS.obs, act=ARGS.act) # single environment instead of a vectorized one    
     if env_name == "takeoff-aviary-v0":
         train_env = make_vec_env(TakeoffAviary,
@@ -130,7 +135,7 @@ if __name__ == "__main__":
     
     #### On-policy algorithms ##################################
     onpolicy_kwargs = dict(activation_fn=torch.nn.ReLU,
-                           net_arch=[512, 512, dict(vf=[256, 128], pi=[256, 128])]
+                           net_arch=[256, 256, dict(vf=[256, 128], pi=[256, 128])]
                            ) # or None
     if ARGS.algo == 'a2c':
         model = A2C(a2cppoMlpPolicy,
@@ -147,6 +152,8 @@ if __name__ == "__main__":
     if ARGS.algo == 'ppo':
         model = PPO(a2cppoMlpPolicy,
                     train_env,
+                    n_steps=n_steps,
+                    batch_size=batch_size,
                     policy_kwargs=onpolicy_kwargs,
                     tensorboard_log=filename+'/tb/',
                     verbose=1
@@ -201,7 +208,7 @@ if __name__ == "__main__":
     #### Create eveluation environment #########################
     if ARGS.obs == ObservationType.KIN: 
         eval_env = gym.make(env_name,
-                            aggregate_phy_steps=shared_constants.AGGR_PHY_STEPS,
+                            aggregate_phy_steps=AGGREGATE_PHY_STEPS,
                             obs=ARGS.obs,
                             act=ARGS.act
                             )
@@ -246,7 +253,7 @@ if __name__ == "__main__":
                                  deterministic=True,
                                  render=False
                                  )
-    model.learn(total_timesteps=35000, #int(1e12),
+    model.learn(total_timesteps=10000000, #int(1e12),
                 callback=eval_callback,
                 log_interval=100,
                 )
