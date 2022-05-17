@@ -1,21 +1,26 @@
 import gym
 import numpy as np
 import pybullet as p
+import yaml
+import os
 from gym import spaces
 from gym_pybullet_drones.envs.BaseAviary import DroneModel, Physics, BaseAviary, ActionType, ObservationType
 from gym_pybullet_drones.envs.multi_agent_rl import BaseMultiagentAviary
 from gym_pybullet_drones.utils import xyz2rpy, rpy2xyz
 from typing import Dict
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.patches import Rectangle
 
 class PredatorPreyAviary(BaseMultiagentAviary):
     def __init__(self,
         num_predators: int=3,
         num_preys: int=1,
         fov: float=np.pi/2,
-        num_obstacles: int=3,
         *,
+        map_config = None,
         drone_model: DroneModel=DroneModel.CF2X,
-        freq: int=240,
+        freq: int=120,
         aggregate_phy_steps: int=1,
         gui=False,
         obs: ObservationType=ObservationType.KIN,
@@ -30,9 +35,15 @@ class PredatorPreyAviary(BaseMultiagentAviary):
         self.predators = list(range(num_predators))
         self.preys = list(range(num_predators, num_predators+num_preys))
 
-        self.num_obstacles = num_obstacles
         self.observe_obstacles = observe_obstacles
+        self.obstacles = {}
 
+        map_config = map_config or os.path.join(os.path.dirname(__file__), "maps", "square.yaml")
+        with open(map_config, 'r') as f:
+            self.map_config = yaml.safe_load(f)
+        for obstacle_type, obstacle_list in self.map_config['obstacles'].items():
+            if obstacle_type == 'box':
+                self.obstacles['box'] = np.split(np.array(obstacle_list), 2, axis=1)
         super().__init__(drone_model=drone_model,
                          num_drones=num_predators+num_preys,
                          physics=Physics.PYB,
@@ -41,8 +52,15 @@ class PredatorPreyAviary(BaseMultiagentAviary):
                          gui=gui,
                          obs=obs,
                          act=ActionType.VEL_RPY,
-                         episode_len_sec=episode_len_sec)
+                         episode_len_sec=episode_len_sec,
+                         max_xyz=self.map_config["boundary"]["max"],
+                         min_xyz=self.map_config["boundary"]["min"])
         self.num_agents = self.NUM_DRONES
+
+        if 'box' in self.obstacles.keys():
+            box_centers, half_extents = self.obstacles['box']
+            box_centers, half_extents = self._clipAndNormalizeXYZ(box_centers)[0], self._clipAndNormalizeXYZ(half_extents)[0]
+            self.obstacles['box'] = (box_centers, half_extents)
 
     def reset(self, init_xyzs=None, init_rpys=None):
         if init_xyzs is not None: self.INIT_XYZS = init_xyzs
@@ -54,7 +72,7 @@ class PredatorPreyAviary(BaseMultiagentAviary):
         # TODO@Botian: 1. how to split? 2. differentiate predators and preys
         self.obs_split_shapes = []
         if self.observe_obstacles: 
-            self.obs_split_shapes.append([self.num_obstacles, 6])
+            self.obs_split_shapes.append([len(self.obstacles['box'][0]), 6])
         self.obs_split_shapes.append([self.NUM_DRONES, self.single_obs_size])
         self.obs_split_sections = np.cumsum(np.concatenate([[dim]*num for num, dim in self.obs_split_shapes]))
         shape = self.obs_split_sections[-1]
@@ -65,12 +83,13 @@ class PredatorPreyAviary(BaseMultiagentAviary):
     def _computeObs(self):
         states = np.stack(list(super()._computeObs().values()))
         obs = {}
+        if self.observe_obstacles:
+            boxes = np.concatenate(self.obstacles['box'], axis=1).flatten()
         for i in self.predators:
             others = np.arange(self.NUM_DRONES) != i
             obs_states = []
             if self.observe_obstacles:
-                obs_states.append(np.concatenate(
-                    [self.box_centers, self.half_extents], axis=1).flatten())
+                obs_states.append(boxes)
             obs_states.append(states[others].flatten()) # other drones
             obs_states.append(states[i]) # self
             obs[i] = np.concatenate(obs_states)
@@ -83,14 +102,16 @@ class PredatorPreyAviary(BaseMultiagentAviary):
         rayToPositions = np.tile(self.pos[-1], (len(self.predators), 1))
         assert rayFromPositions.shape==rayToPositions.shape
         d = rayToPositions-rayFromPositions
-        d /= np.linalg.norm(d, axis=-1, keepdims=True)
+        distance = np.linalg.norm(d, axis=-1, keepdims=True)
+        d /= distance
         ori = rpy2xyz(self.rpy[:-1])
         in_fov = (d * ori).sum(1) > np.cos(self.fov/2)
         hit_id = np.array([hit[0] for hit in p.rayTestBatch(
             rayFromPositions=rayFromPositions,
             rayToPositions=rayToPositions
         )])
-        in_sight = ((hit_id==self.NUM_DRONES) & in_fov).astype(float)
+        in_sight = ((hit_id==self.NUM_DRONES) & in_fov & (distance < 0.5)).astype(float)
+
         reward = np.zeros(self.NUM_DRONES)
         reward[self.predators] += in_sight.sum() / len(self.predators)
         reward[self.preys] += -in_sight.sum()
@@ -104,47 +125,63 @@ class PredatorPreyAviary(BaseMultiagentAviary):
 
     def _addObstacles(self):
         super()._addObstacles()
-        box_centers =[]
-        while len(box_centers) < self.num_obstacles:
-            center = np.random.random(3)*2
-            if not np.all(center[:2] < np.array([1, 1])):
-                box_centers.append(center)
-        self.box_centers = np.array(box_centers)
-        self.half_extents = np.random.random((self.num_obstacles, 3))*0.1+0.1
-        self.half_extents[:, -1] = self.box_centers[:, -1]
-        
-        for i in range(self.num_obstacles):
-            visualShapeId = p.createVisualShape(
-                shapeType=p.GEOM_BOX, halfExtents=self.half_extents[i])
-            collisionShapeId = p.createCollisionShape(
-                shapeType=p.GEOM_BOX, halfExtents=self.half_extents[i])
-            p.createMultiBody(
-                baseCollisionShapeIndex=collisionShapeId,
-                baseVisualShapeIndex=visualShapeId,
-                basePosition=self.box_centers[i])
-        
-        self.box_centers, _ = self._clipAndNormalizeXYZ(self.box_centers)
-        self.half_extents, _ = self._clipAndNormalizeXYZ(self.half_extents)
+        # add box obstacles
+        if 'box' in self.obstacles.keys():
+            for center, half_extent in zip(*self.obstacles['box']):
+                visualShapeId = p.createVisualShape(
+                    shapeType=p.GEOM_BOX, halfExtents=half_extent*self.MAX_XYZ)
+                collisionShapeId = p.createCollisionShape(
+                    shapeType=p.GEOM_BOX, halfExtents=half_extent*self.MAX_XYZ)
+                p.createMultiBody(
+                    baseCollisionShapeIndex=collisionShapeId,
+                    baseVisualShapeIndex=visualShapeId,
+                    basePosition=center*self.MAX_XYZ)
+
+    def render(self, mode="camera"):
+        if mode == "camera":
+            return super().render()[0]
+        elif mode == "mini_map":
+            fig = Figure()
+            canvas = FigureCanvasAgg(fig)
+            ax = fig.gca()
+            xy = self.pos[:, :2]
+            uv = rpy2xyz(self.rpy)[:, :2]
+            ax.quiver(*xy[self.predators].T, *uv[self.predators].T, color="r")
+            ax.quiver(*xy[self.preys].T, *uv[self.preys].T, color="b")
+            for center, half_extent in zip(*self.obstacles['box']):
+                xy = (center[:2] - half_extent[:2]) * self.MAX_XYZ[:2]
+                w, h = half_extent[:2] * 2 * self.MAX_XYZ[:2]
+                ax.add_patch(Rectangle(xy, w, h))
+            ax.set_title(f"step {self.step_counter}")
+            ax.set_xlim(self.MIN_XYZ[0], self.MAX_XYZ[0])
+            ax.set_ylim(self.MIN_XYZ[1], self.MAX_XYZ[1])
+            buffer, (width, height) = canvas.print_to_buffer()
+            return np.frombuffer(buffer, np.uint8).reshape(height, width, -1)
+        else:
+            raise NotImplementedError(mode)
 
 class PredatorAviary(PredatorPreyAviary):
     def __init__(self, 
             num_predators: int = 2, 
             fov: float = np.pi / 2, 
             *, 
+            map_config = None,
             drone_model: DroneModel = DroneModel.CF2X, 
-            freq: int = 240, 
+            freq: int = 120, 
             aggregate_phy_steps: int = 1, 
             gui=False, 
             episode_len_sec=5,
             observe_obstacles: bool=True):
         self.prey = num_predators
         super().__init__(num_predators, 1, fov, 
+            map_config=map_config,
             drone_model=drone_model, freq=freq, 
             aggregate_phy_steps=aggregate_phy_steps, 
             gui=gui, episode_len_sec=episode_len_sec, 
             observe_obstacles=observe_obstacles)
-
+        
         self.num_agents = len(self.predators)
+        self.waypoints = self.map_config['prey']['waypoints']
 
     def _actionSpace(self) -> spaces.Dict:
         action_space = super()._actionSpace()
@@ -159,8 +196,11 @@ class PredatorAviary(PredatorPreyAviary):
         return {i: obs[i] for i in self.predators}
 
     def reset(self, init_xyzs=None, init_rpys=None):
+        if init_xyzs is None: init_xyzs = self.INIT_XYZS
+        if init_rpys is None: init_rpys = self.INIT_RPYS
+        self._resetPrey()
+        init_xyzs[-1] = self.waypoints[0]
         obs = super().reset(init_xyzs, init_rpys)
-        self._setPrey()
         return {i: obs[i] for i in self.predators}
 
     def step(self, actions: Dict[int, np.ndarray]):
@@ -175,13 +215,7 @@ class PredatorAviary(PredatorPreyAviary):
         done = super()._computeDone()
         return done[self.predators]
 
-    def _setPrey(self):
-        self.waypoints = np.array([
-            [1, 0, 0.3], 
-            [0, 1, 0.4], 
-            [-1, 0, 0.2], 
-            [0, -1, 0.3]
-        ])
+    def _resetPrey(self):
         if np.random.random() > 0.5:
             self.waypoints = np.flipud(self.waypoints)
         self.waypoint_cnt = 0
@@ -210,73 +244,11 @@ class PredatorAviary(PredatorPreyAviary):
             actions[idx] = action
         return actions
 
-class DebugAviary(BaseMultiagentAviary):
-    def __init__(self,
-        num_agents=3,
-        *,
-        drone_model: DroneModel=DroneModel.CF2X,
-        freq: int=240,
-        aggregate_phy_steps: int=1,
-        gui=False,
-        obs: ObservationType=ObservationType.KIN,
-        episode_len_sec=5,
-        ):
-
-        super().__init__(drone_model=drone_model,
-                         num_drones=num_agents,
-                         physics=Physics.PYB,
-                         freq=freq,
-                         aggregate_phy_steps=aggregate_phy_steps,
-                         gui=gui,
-                         obs=obs,
-                         act=ActionType.VEL_RPY,
-                         episode_len_sec=episode_len_sec)
-
-        self.goal_state = np.zeros((self.NUM_DRONES, 20))
-        self.goal_state[:, :3] += self.INIT_XYZS*2
-        self.num_agents = self.NUM_DRONES
-
-    def reset(self, init_xyzs=None, init_rpys=None):
-        if init_xyzs is not None: self.INIT_XYZS = init_xyzs
-        if init_rpys is not None: self.INIT_RPYS = init_rpys
-        obs = super().reset()
-        return obs
-
-    def _observationSpace(self) -> spaces.Dict:
-        shape = (self.NUM_DRONES+1) * self.single_obs_size
-        low = -np.ones(shape, dtype=np.float32)
-        high = np.ones(shape, dtype=np.float32)
-        return spaces.Dict({i: spaces.Box(low, high) for i in range(self.NUM_DRONES)})
-    
-    def _computeObs(self):
-        states = np.stack(list(super()._computeObs().values()))
-        obs = {}
-        for i in range(self.NUM_DRONES):
-            others = np.arange(self.NUM_DRONES) != i
-            obs[i] = np.concatenate([states[others], self.goal_state[i][None], states[i][None]]).reshape(-1)
-        return obs
-    
-    def _computeReward(self):
-        distance = np.linalg.norm(self.pos-self.goal_state[:, :3], axis=1)
-        return -distance
-
-    def dummyPolicy(self, states):
-        actions = {}
-        for idx in range(self.NUM_DRONES):
-            action = np.zeros(7, dtype=np.float32)
-            target_vel = self.goal_state[idx, :3] - self.pos[idx]
-            target_rpy = xyz2rpy(target_vel, True)
-            action[:3] = target_vel
-            action[3] = min(1., np.linalg.norm(self.pos[idx]-self.goal_state[idx, :3]))
-            action[4:] = target_rpy
-            actions[idx] = action
-        return actions
-
 if __name__ == "__main__":
     import imageio
     import os.path as osp
     from tqdm import tqdm
-    env = PredatorAviary(aggregate_phy_steps=5, episode_len_sec=10, observe_obstacles=False)
+    env = PredatorAviary(aggregate_phy_steps=4, episode_len_sec=20)
     print(env.obs_split_shapes)
     print(env.obs_split_sections)
     # obs = env.reset()
@@ -297,7 +269,7 @@ if __name__ == "__main__":
 
         obs, reward, done, info = env.step(action)
         reward_total += sum(reward)
-        if i % 10 == 0: frames.append(env.render()[0])
+        if i % 6 == 0: frames.append(env.render("mini_map"))
         assert not np.any(done), done
     # assert np.all(done), f"{env.step_counter}, {env.MAX_STEPS} * {env.AGGR_PHY_STEPS}"
     imageio.mimsave(

@@ -35,7 +35,8 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                  obs: ObservationType=ObservationType.KIN,
                  act: ActionType=ActionType.RPM,
                  episode_len_sec=5,
-                 max_xyz=[5, 5, 2]
+                 max_xyz = [5, 5, 2],
+                 min_xyz = [-5, -5, 0],
                  ):
         """Initialization of a generic multi-agent RL environment.
 
@@ -85,7 +86,7 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
         self.ACT_TYPE = ActionType(act)
         self.EPISODE_LEN_SEC = episode_len_sec
         self.MAX_XYZ = np.array(max_xyz)
-        self.MIN_XYZ = -np.array(max_xyz[:2]+[0])
+        self.MIN_XYZ = np.array(min_xyz)
         #### Create integrated controllers #########################
         if act in [ActionType.PID, ActionType.VEL, ActionType.ONE_D_PID, ActionType.VEL_RPY]:
             os.environ['KMP_DUPLICATE_LIB_OK']='True'
@@ -397,9 +398,12 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
     def add_camera(self, camera):
         self.cameras.append(camera)
 
-    def render(self, *args, **kwargs):
-        images = [cam._get_image(self.CLIENT) for cam in self.cameras]
-        return images
+    def render(self, mode="camera"):
+        if mode == "camera":
+            images = [cam._get_image(self.CLIENT) for cam in self.cameras]
+            return images
+        else:
+            raise NotImplementedError(mode)
     
 class Camera:
     CAMERA_COUNT = 0
