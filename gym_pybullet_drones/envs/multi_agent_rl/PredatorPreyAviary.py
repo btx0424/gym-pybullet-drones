@@ -17,6 +17,7 @@ class PredatorPreyAviary(BaseMultiagentAviary):
         num_predators: int=3,
         num_preys: int=1,
         fov: float=np.pi/2,
+        vision_range: float=np.inf,
         *,
         map_config = None,
         drone_model: DroneModel=DroneModel.CF2X,
@@ -34,6 +35,7 @@ class PredatorPreyAviary(BaseMultiagentAviary):
         self.fov = fov
         self.predators = list(range(num_predators))
         self.preys = list(range(num_predators, num_predators+num_preys))
+        self.vision_range = vision_range
 
         self.observe_obstacles = observe_obstacles
         self.obstacles = {}
@@ -111,7 +113,7 @@ class PredatorPreyAviary(BaseMultiagentAviary):
             rayFromPositions=rayFromPositions,
             rayToPositions=rayToPositions
         )])
-        in_sight = ((hit_id==self.NUM_DRONES) & in_fov & (distance < 0.5)).astype(float)
+        in_sight = ((hit_id==self.NUM_DRONES) & in_fov & (distance < self.vision_range)).astype(float)
 
         reward = np.zeros(self.NUM_DRONES)
         reward[self.predators] += in_sight.sum() / len(self.predators)
@@ -158,7 +160,7 @@ class PredatorPreyAviary(BaseMultiagentAviary):
                 xy = (center[:2] - half_extent[:2]) * self.MAX_XYZ[:2]
                 w, h = half_extent[:2] * 2 * self.MAX_XYZ[:2]
                 ax.add_patch(Rectangle(xy, w, h))
-            ax.set_title(f"step {self.step_counter}, reward {self.episode_reward.sum()}")
+            ax.set_title(f"step {self.step_counter//self.AGGR_PHY_STEPS}, reward {self.episode_reward.sum()}")
             ax.set_xlim(self.MIN_XYZ[0], self.MAX_XYZ[0])
             ax.set_ylim(self.MIN_XYZ[1], self.MAX_XYZ[1])
             buffer, (width, height) = canvas.print_to_buffer()
