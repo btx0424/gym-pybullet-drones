@@ -66,6 +66,7 @@ class PredatorPreyAviary(BaseMultiagentAviary):
         if init_xyzs is not None: self.INIT_XYZS = init_xyzs
         if init_rpys is not None: self.INIT_RPYS = init_rpys
         obs = super().reset()
+        self.episode_reward = np.zeros(self.num_agents)
         return obs
     
     def _observationSpace(self) -> spaces.Dict:
@@ -137,6 +138,11 @@ class PredatorPreyAviary(BaseMultiagentAviary):
                     baseVisualShapeIndex=visualShapeId,
                     basePosition=center*self.MAX_XYZ)
 
+    def step(self, action):
+        obs, reward, done, info = super().step(action)
+        self.episode_reward += reward
+        return obs, reward, done, info
+
     def render(self, mode="camera"):
         if mode == "camera":
             return super().render()[0]
@@ -152,7 +158,7 @@ class PredatorPreyAviary(BaseMultiagentAviary):
                 xy = (center[:2] - half_extent[:2]) * self.MAX_XYZ[:2]
                 w, h = half_extent[:2] * 2 * self.MAX_XYZ[:2]
                 ax.add_patch(Rectangle(xy, w, h))
-            ax.set_title(f"step {self.step_counter}")
+            ax.set_title(f"step {self.step_counter}, reward {self.episode_reward.sum()}")
             ax.set_xlim(self.MIN_XYZ[0], self.MAX_XYZ[0])
             ax.set_ylim(self.MIN_XYZ[1], self.MAX_XYZ[1])
             buffer, (width, height) = canvas.print_to_buffer()
