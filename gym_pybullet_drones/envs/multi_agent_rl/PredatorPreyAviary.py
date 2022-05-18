@@ -113,8 +113,7 @@ class PredatorPreyAviary(BaseMultiagentAviary):
             rayFromPositions=rayFromPositions,
             rayToPositions=rayToPositions
         )])
-        in_sight = ((hit_id==self.NUM_DRONES) & in_fov & (distance < self.vision_range)).astype(float)
-
+        in_sight = ((hit_id==self.NUM_DRONES) & in_fov & (distance.squeeze() < self.vision_range)).astype(float)
         reward = np.zeros(self.NUM_DRONES)
         reward[self.predators] += in_sight.sum() / len(self.predators)
         reward[self.preys] += -in_sight.sum()
@@ -172,6 +171,7 @@ class PredatorAviary(PredatorPreyAviary):
     def __init__(self, 
             num_predators: int = 2, 
             fov: float = np.pi / 2, 
+            vision_range: float=np.inf,
             *, 
             map_config = None,
             drone_model: DroneModel = DroneModel.CF2X, 
@@ -181,7 +181,7 @@ class PredatorAviary(PredatorPreyAviary):
             episode_len_sec=5,
             observe_obstacles: bool=True):
         self.prey = num_predators
-        super().__init__(num_predators, 1, fov, 
+        super().__init__(num_predators, 1, fov, vision_range,
             map_config=map_config,
             drone_model=drone_model, freq=freq, 
             aggregate_phy_steps=aggregate_phy_steps, 
