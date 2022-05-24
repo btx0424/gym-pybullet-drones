@@ -113,7 +113,7 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                          )
         #### Set a limit on the maximum target speed ###############
         self.SPEED_LIMIT = 0.03 * self.MAX_SPEED_KMH * (1000/3600)
-        self.MAX_STEPS = int(self.EPISODE_LEN_SEC * self.SIM_FREQ / self.AGGR_PHY_STEPS)
+        self.MAX_PHY_STEPS = self.EPISODE_LEN_SEC * self.SIM_FREQ
         self.cameras = [Camera()]
 
     def _addObstacles(self):
@@ -274,7 +274,7 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                     control_timestep=self.AGGR_PHY_STEPS*self.TIMESTEP, 
                     state=self._getDroneStateVector(k),
                     target_pos=self.pos[k],
-                    target_vel= vel_d * np.abs(speed) * self.SPEED_LIMIT * 3,
+                    target_vel= vel_d * (min(speed, 1)+1) * self.SPEED_LIMIT * 2,
                     target_rpy=rpy * MAX_RPY
                 )[0]
             else:
@@ -302,8 +302,8 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
             ############################################################
             #### OBS OF SIZE 20 (WITH QUATERNION AND RPMS)
             #### Observation vector ### X        Y        Z       Q1   Q2   Q3   Q4   R       P       Y       VX       VY       VZ       WX       WY       WZ       P0            P1            P2            P3
-            obs_lower_bound = np.array([-1,      -1,      0,      -1,  -1,  -1,  -1,  -1,     -1,     -1,     -1,      -1,      -1,      -1,      -1,      -1,      -1,           -1,           -1,           -1], dtype)
-            obs_upper_bound = np.array([1,       1,       1,      1,   1,   1,   1,   1,      1,      1,      1,       1,       1,       1,       1,       1,       1,            1,            1,            1], dtype)          
+            obs_lower_bound = np.array([-1,      -1,      0,      -1,  -1,  -1,  -1,  -1,     -1,     -1,     -1,      -1,      -1,      -1,      -1,      -1,      -1,           -1,           -1,           -1])
+            obs_upper_bound = np.array([1,       1,       1,      1,   1,   1,   1,   1,      1,      1,      1,       1,       1,       1,       1,       1,       1,            1,            1,            1])          
             return spaces.Dict({i: spaces.Box(low=obs_lower_bound, high=obs_upper_bound, dtype=np.float32) for i in range(self.NUM_DRONES)})
             ############################################################
             #### OBS SPACE OF SIZE 12
@@ -386,14 +386,14 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
         return np.zeros(self.NUM_DRONES)
 
     def _computeDone(self):
-        if self.step_counter >= (self.MAX_STEPS - 1) * self.AGGR_PHY_STEPS:
+        if self.step_counter >= self.MAX_PHY_STEPS - self.EPISODE_LEN_SEC:
             done = np.ones(self.NUM_DRONES, dtype=bool)
         else:
             done = np.zeros(self.NUM_DRONES, dtype=bool)
         return done
     
     def _computeInfo(self):
-        return {i:{} for i in range(self.NUM_DRONES)}
+        return np.array([{} for i in range(self.NUM_DRONES)])
 
     def add_camera(self, camera):
         self.cameras.append(camera)
