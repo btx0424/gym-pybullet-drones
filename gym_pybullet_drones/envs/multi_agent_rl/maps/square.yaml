@@ -1,6 +1,6 @@
-boundary:
-  min: [-3, -3, 0]
-  max: [3, 3, 2]
+map:
+  min_xyz: [-3, -3, 0]
+  max_xyz: [3, 3, 2]
 obstacles:
   box: 
     - [-1.5, 1.5, 1, 0.2, 0.2, 1]
