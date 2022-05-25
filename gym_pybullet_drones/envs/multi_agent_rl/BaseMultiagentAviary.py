@@ -386,7 +386,7 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
         return np.zeros(self.NUM_DRONES)
 
     def _computeDone(self):
-        if self.step_counter >= self.MAX_PHY_STEPS:
+        if self.step_counter >= self.MAX_PHY_STEPS - self.AGGR_PHY_STEPS:
             done = np.ones(self.NUM_DRONES, dtype=bool)
         else:
             done = np.zeros(self.NUM_DRONES, dtype=bool)

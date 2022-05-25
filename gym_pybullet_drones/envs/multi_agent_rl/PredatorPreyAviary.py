@@ -12,6 +12,21 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.patches import Rectangle
 
+def in_sight_test(from_pos, to_pos, ori, fov, to_id, vision_range):
+    d = to_pos[:, None] - from_pos # (n_prey, n_predators, 3)
+    distance = np.linalg.norm(d, axis=-1, keepdims=True)
+    d /= distance
+    
+    in_fov = ((d * ori).sum(-1) > np.cos(fov/2)) # 
+    hit_id = np.array([hit[0] for hit in p.rayTestBatch(
+        rayFromPositions=np.tile(from_pos.T, len(to_pos)).T.reshape(-1, 3),
+        rayToPositions=np.tile(to_pos, len(from_pos)).reshape(-1, 3),
+    )]).reshape(len(to_pos), len(from_pos)) - 1
+    hit = (hit_id.T == np.array(to_id)).T
+
+    in_sight = hit & in_fov & (distance.squeeze() < vision_range) # (prey, predators)
+    return in_sight
+
 class PredatorPreyAviary(BaseMultiagentAviary):
     def __init__(self,
         num_predators: int=3,
@@ -111,24 +126,12 @@ class PredatorPreyAviary(BaseMultiagentAviary):
     def _computeReward(self):
         rayFromPositions = self.pos[self.predators]
         rayToPositions = self.pos[self.preys]
-
-        d = rayToPositions[:, None] - rayFromPositions # (n_prey, n_predators, 3)
-        distance = np.linalg.norm(d, axis=-1, keepdims=True)
-        d /= distance
         ori = rpy2xyz(self.rpy[self.predators]) # (n_predators, 3)
-        in_fov = ((d * ori).sum(-1) > np.cos(self.fov/2)) # 
-        
-        hit_id = np.array([hit[0] for hit in p.rayTestBatch(
-            rayFromPositions=np.tile(rayFromPositions, self.num_preys).reshape(-1, 3),
-            rayToPositions=np.tile(rayToPositions.T, self.num_predators).T.reshape(-1, 3)
-        )]).reshape(self.num_preys, self.num_predators)
-        
-        hit = (hit_id.T == np.array(self.preys)+1).T
+        in_sight = in_sight_test(rayFromPositions, rayToPositions, ori, self.fov, self.preys, self.vision_range)
 
-        in_sight = hit & in_fov & (distance.squeeze() < self.vision_range) # (prey, predators)
         reward = np.zeros(self.NUM_DRONES)
-        reward[self.predators] = np.sum(in_sight.any(1)) / len(self.predators)
-        reward[self.preys] = -np.sum(in_sight.any(1)) / len(self.preys)
+        reward[self.predators] = np.sum(in_sight.any(1)) / self.num_predators
+        reward[self.preys] = -np.sum(in_sight.any(1)) / self.num_preys
         assert reward.sum() == 0
         
         # collision_penalty
@@ -404,11 +407,40 @@ class RulePredatorPolicy:
             action[i] = []
         return action
 
+def test_in_sight():
+    env = PredatorPreyAviary(
+        num_predators=2, num_preys=4,
+        aggregate_phy_steps=4, episode_len_sec=20, 
+        map_config="square")
+    print(env.predators, env.preys)
+    print(env.obs_split_shapes)
+    print(env.obs_split_sections)
+
+    init_xyzs = np.array([
+        [0, 1, 0.3], 
+        [0, -1, 0.3],
+        [1, 1, 0.3],
+        [1.1, 0, 0.3],
+        [1, -1, 0.3],
+        [0, 0, 0.3]
+    ])
+    obs = env.reset(init_xyzs=init_xyzs)
+    print(in_sight_test(
+        from_pos=env.pos[env.predators],
+        to_pos=env.pos[env.preys],
+        ori=rpy2xyz(env.rpy[env.predators]),
+        fov=env.fov,
+        to_id=env.preys,
+        vision_range=env.vision_range
+    ))
+    env.close()
 
 if __name__ == "__main__":
     import imageio
     import os.path as osp
     from tqdm import tqdm
+
+    test_in_sight()
     env = PredatorPreyAviary(
         num_predators=2, num_preys=1,
         aggregate_phy_steps=4, episode_len_sec=20, 
@@ -442,8 +474,8 @@ if __name__ == "__main__":
         obs, reward, done, info = env.step(action)
         reward_total += sum(reward)
         # collision_penalty += sum(info[j]["collision_penalty"] for j in range(env.num_agents))
-        if i % 6 == 0: frames.append(env.render("mini_map"))
         if np.all(done): break
+        if i % 6 == 0: frames.append(env.render("mini_map"))
 
     imageio.mimsave(
         osp.join(osp.dirname(osp.abspath(__file__)), f"test_{env.__class__.__name__}_{reward_total}.gif"),
