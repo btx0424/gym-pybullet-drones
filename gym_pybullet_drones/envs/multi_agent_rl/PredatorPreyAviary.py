@@ -11,6 +11,8 @@ from typing import Dict, List, Tuple
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.patches import Rectangle
+from collections import defaultdict
+import heapq
 
 def in_sight_test(from_pos, to_pos, ori, fov, to_id, vision_range):
     d = to_pos[:, None] - from_pos # (n_prey, n_predators, 3)
@@ -358,11 +360,86 @@ class RulePredatorPolicy:
         self.prey_indexes = prey_indexes,
         self.obs_split_sections = obs_split_sections
 
+        adj = np.stack(np.meshgrid([-1, 0, 1], [-1, 0, 1], [-1, 0, 1]), axis=-1).reshape(-1, 3)
+        self.adj = adj[~(adj == 0).all(1)]
+
+        min_xyz = np.array(map_config["map"]["min_xyz"])
+        max_xyz = np.array(map_config["map"]["max_xyz"])
+        num_cells = 20
+        cell_size = (max_xyz - min_xyz) / num_cells
+        xx, yy, zz = (np.linspace(min_xyz, max_xyz, num_cells+1)[:-1] + cell_size/2).T
+        self.cell_centers = np.stack(np.meshgrid(xx, yy, zz, indexing="ij"), -1)
+
+        self.is_obstacle = np.zeros(self.cell_centers.shape[:3], dtype=bool)
+        map_config["obstacles"]["box"] += [
+            [min_xyz[0]-0.1, 0, 1, 0.1, max_xyz[1], 1],
+            [0, max_xyz[1]+0.1, 1, max_xyz[0], 0.1, 1],
+            [max_xyz[0]+0.1, 0, 1, 0.1, max_xyz[1], 1],
+            [0, min_xyz[1]-0.1, 1, max_xyz[0], 0.1, 1]
+        ]
+        for box in map_config["obstacles"]["box"]:
+            center, half_extent = np.split(np.array(box), 2)
+            half_extent += 0.1
+            occupation = np.logical_and(
+                np.all(self.cell_centers >= np.floor((center-half_extent-min_xyz)/cell_size)*cell_size+min_xyz, axis=-1),
+                np.all(self.cell_centers <= np.ceil((center+half_extent-min_xyz)/cell_size)*cell_size+min_xyz, axis=-1))
+            self.is_obstacle[occupation] = True
+        self.max_xyz = max_xyz
+        self.min_xyz = min_xyz
+        self.cell_size = cell_size
+
     def __call__(self, states: Dict[int, np.ndarray]) -> Dict[int, np.ndarray]:
         action = {}
-        for i in self.predator_indexes:
-            action[i] = []
+        for idx, state in states.items():
+            agent_action = np.zeros(7, dtype=np.float32)
+            prey_state, self_state = np.split(state, self.obs_split_sections[:-1])[-2:]
+            pos_prey, pos_self = prey_state[:3], self_state[:3]
+            cell_prey, cell_self = self._pos_to_cell(pos_self*self.max_xyz), self._pos_to_cell(pos_prey*self.max_xyz)
+            if cell_prey!=cell_self:
+                path = self._search_path(cell_self, cell_prey)
+                target_pos = self.cell_centers[path[1]] / self.max_xyz
+                target_vel = target_pos - pos_self
+                target_rpy = xyz2rpy(target_vel, True)
+                agent_action[:3] = target_vel
+                agent_action[3] = 0.5
+                agent_action[4:] = target_rpy
+            action[idx] = agent_action
         return action
+
+    def _search_path(self, source, target):
+        pos, is_obstacle = self.cell_centers, self.is_obstacle
+        h = lambda x: np.sum(np.abs(pos[target] - pos[x]))
+        d = lambda a, b: np.linalg.norm(pos[a] - pos[b])
+        openset = [(0, source)]
+        came_from = {}
+        g_score = defaultdict(lambda: np.inf)
+        g_score[source] = 0
+
+        while len(openset) > 0:
+            f, current = heapq.heappop(openset)
+            if current == target:
+                path = [current]
+                while current in came_from.keys():
+                    current = came_from[current]
+                    path.append(current)
+                path.reverse()
+                return path
+            for neighbor in current + self.adj:
+                neighbor = tuple(neighbor)
+                try:
+                    if is_obstacle[neighbor] : continue
+                except IndexError: continue
+                t = g_score[current] + d(current, neighbor)
+                if t < g_score[neighbor]:
+                    came_from[neighbor] = current
+                    g_score[neighbor] = t
+                    f = t + h(neighbor)
+                    if (f, neighbor) not in openset:
+                        heapq.heappush(openset, (f, neighbor))
+        return []
+    
+    def _pos_to_cell(self, pos):
+        return tuple(((pos - self.min_xyz) / self.cell_size).astype(int))
 
 def test(func):
     def foo(*args, **kwargs):
@@ -376,9 +453,6 @@ def test_in_sight():
         num_predators=2, num_preys=4,
         aggregate_phy_steps=4, episode_len_sec=20, 
         map_config="square")
-    print(env.predators, env.preys)
-    print(env.obs_split_shapes)
-    print(env.obs_split_sections)
 
     init_xyzs = np.array([
         [0, 1, 0.3], 
@@ -399,51 +473,43 @@ def test_in_sight():
     ))
     env.close()
 
+@test
+def test_predator_rule_policy():
+    env = PredatorPreyAviary(
+        num_predators=1, num_preys=1,
+        aggregate_phy_steps=4, episode_len_sec=20, 
+        map_config="split")
+    predator_policy = RulePredatorPolicy(env.map_config, env.predators, env.preys, env.obs_split_sections)
+    
+    obs = env.reset(init_xyzs="random")
+    frames = []
+    reward_total = 0
+    try:
+        for i in tqdm(range(env.MAX_PHY_STEPS//env.AGGR_PHY_STEPS)):
+            action = {}
+            action.update(predator_policy({i: obs[i] for i in env.predators}))
+            action.update({i: np.zeros(7) for i in env.preys})
+            
+            obs, reward, done, info = env.step(action)
+            reward_total += sum(reward)
+            if np.all(done): break
+            if i % 3 == 0: frames.append(env.render("mini_map"))
+    except Exception as e:
+        print(e)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        imageio.mimsave(
+            osp.join(osp.dirname(osp.abspath(__file__)), f"test_{env.__class__.__name__}_{reward_total}.gif"),
+            ims=frames,
+            format="GIF"
+        )
+        print(reward_total, done)
+
 if __name__ == "__main__":
     import imageio
     import os.path as osp
     from tqdm import tqdm
 
     test_in_sight()
-    env = PredatorPreyAviary(
-        num_predators=2, num_preys=1,
-        aggregate_phy_steps=4, episode_len_sec=20, 
-        map_config="square")
-    print(env.predators, env.preys)
-    print(env.obs_split_shapes)
-    print(env.obs_split_sections)
-    # obs = env.reset()
-    # assert env.observation_space.contains(obs), obs
-    # action = env.action_space.sample()
-    # assert env.action_space.contains(action)
-    # obs, _, _, _ = env.step(action)
-    # assert env.observation_space.contains(obs)
-
-    predator_policy = VelDummyPolicy(env.obs_split_sections)
-    prey_policy = WayPointPolicy(
-        env._clipAndNormalizeXYZ(env.map_config['prey']['waypoints'])[0], 
-        env.obs_split_sections)
-
-    init_xyzs = env.INIT_XYZS.copy()
-    init_xyzs[-1] = env.map_config['prey']['waypoints'][0]
-    obs = env.reset(init_xyzs="random")
-    frames = []
-    reward_total = 0
-    collision_penalty = 0
-    for i in tqdm(range(env.MAX_PHY_STEPS//env.AGGR_PHY_STEPS)):
-        action = {}
-        action.update(predator_policy({i: obs[i] for i in env.predators}))
-        action.update(prey_policy({i: obs[i] for i in env.preys}))
-        
-        obs, reward, done, info = env.step(action)
-        reward_total += sum(reward)
-        # collision_penalty += sum(info[j]["collision_penalty"] for j in range(env.num_agents))
-        if np.all(done): break
-        if i % 6 == 0: frames.append(env.render("mini_map"))
-
-    imageio.mimsave(
-        osp.join(osp.dirname(osp.abspath(__file__)), f"test_{env.__class__.__name__}_{reward_total}.gif"),
-        ims=frames,
-        format="GIF"
-    )
-    print(reward_total, collision_penalty, done)
+    test_predator_rule_policy()
