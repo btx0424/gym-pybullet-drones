@@ -62,9 +62,28 @@ class PredatorPreyAviary(BaseMultiagentAviary):
             map_config = os.path.join(os.path.dirname(__file__), "maps", f"{map_config}.yaml")
         with open(map_config, 'r') as f:
             self.map_config = yaml.safe_load(f)
+        
+        min_xyz = np.array(self.map_config["map"]["min_xyz"])
+        max_xyz = np.array(self.map_config["map"]["max_xyz"])
+
+        cell_size = 0.4
+        grid_shape = ((max_xyz - min_xyz) / cell_size).astype(int)
+        centers = np.array(list(np.ndindex(*(grid_shape)))) + 0.5
+        avail = np.ones(len(centers), dtype=bool)
+
         for obstacle_type, obstacle_list in self.map_config['obstacles'].items():
             if obstacle_type == 'box':
-                self.obstacles['box'] = np.split(np.array(obstacle_list), 2, axis=1)
+                box_centers, half_extents = np.split(np.array(obstacle_list), 2, axis=1)
+                for center, half_extent in zip(box_centers, half_extents):
+                    min_corner = ((center-half_extent-min_xyz) / cell_size).astype(int)
+                    max_corner = np.ceil((center+half_extent-min_xyz) / cell_size).astype(int)
+                    mask = (centers > min_corner).all(1) & (centers < max_corner).all(1)
+                    avail[mask] = False
+                self.obstacles['box'] = (box_centers, half_extents)
+
+        self.avail = avail.nonzero()[0]
+        self.grid_centers = centers / grid_shape * (max_xyz-min_xyz) + min_xyz
+
         super().__init__(drone_model=drone_model,
                          num_drones=num_predators+num_preys,
                          physics=Physics.PYB,
@@ -86,7 +105,12 @@ class PredatorPreyAviary(BaseMultiagentAviary):
             self.obstacles['box'] = (box_centers, half_extents)
 
     def reset(self, init_xyzs=None, init_rpys=None):
-        if init_xyzs is not None: self.INIT_XYZS = init_xyzs
+        if isinstance(init_xyzs, np.ndarray):
+            self.INIT_XYZS = init_xyzs
+        elif init_xyzs == "random": 
+            if not hasattr(self, "rng"): self.seed()
+            sample_pos_idx = self.rng.choice(self.avail, self.NUM_DRONES, replace=False)
+            self.INIT_XYZS = self.grid_centers[sample_pos_idx]
         if init_rpys is not None: self.INIT_RPYS = init_rpys
         obs = super().reset()
         self.episode_reward = np.zeros(self.num_agents)
@@ -262,73 +286,6 @@ class PredatorAviary(PredatorPreyAviary):
     def dummyPolicy():
         return RulePredatorPolicy
 
-class PreyAviary(PredatorPreyAviary):
-    def __init__(self, 
-            num_predators: int = 1,
-            num_preys: int = 1, 
-            fov: float = np.pi / 2, 
-            vision_range: float=np.inf,
-            *, 
-            map_config = None,
-            drone_model: DroneModel = DroneModel.CF2X, 
-            freq: int = 120, 
-            aggregate_phy_steps: int = 1, 
-            gui=False, 
-            episode_len_sec=5,
-            observe_obstacles: bool=True):
-
-        super().__init__(num_predators + num_preys, 1, fov, vision_range,
-            map_config=map_config,
-            drone_model=drone_model, freq=freq, 
-            aggregate_phy_steps=aggregate_phy_steps, 
-            gui=gui, episode_len_sec=episode_len_sec, 
-            observe_obstacles=observe_obstacles)
-        
-        self.num_agents = len(self.predators)
-        self.waypoints = np.array(self.map_config['prey']['waypoints'])
-
-    def _actionSpace(self) -> spaces.Dict:
-        action_space = super()._actionSpace()
-        return spaces.Dict({i: action_space[i] for i in self.preys})
-
-    def _observationSpace(self) -> spaces.Dict:
-        observation_space = super()._observationSpace()
-        return spaces.Dict({i: observation_space[i] for i in self.preys})
-
-    def _computeObs(self):
-        obs = super()._computeObs()
-        self.predator_action = self.predator_policy({i: obs[i] for i in self.predators})
-        return {i: obs[i] for i in self.preys}
-
-    def reset(self, init_xyzs=None, init_rpys=None):
-        if init_xyzs is None: init_xyzs = self.INIT_XYZS
-        if init_rpys is None: init_rpys = self.INIT_RPYS
-        init_xyzs[-1] = self.waypoints[0]
-        self.predator_policy = RulePredatorPolicy(
-            
-            self._clipAndNormalizeXYZ(self.waypoints)[0], self.obs_split_sections)
-        obs = super().reset(init_xyzs, init_rpys)
-        return {i: obs[i] for i in self.preys}
-
-    def step(self, actions: Dict[int, np.ndarray]):
-        actions.update(self.predator_action)
-        return super().step(actions)
-
-    def _computeReward(self):
-        reward = super()._computeReward()
-        return reward[self.preys]
-
-    def _computeDone(self):
-        done = super()._computeDone()
-        return done[self.preys]
-
-    def _computeInfo(self):
-        info = super()._computeInfo()
-        return info[self.preys]
-
-    @staticmethod
-    def dummyPolicy():
-        return RulePreyPolicy
 
 class WayPointPolicy:
     def __init__(self, waypoints, obs_split_sections) -> None:
@@ -407,6 +364,13 @@ class RulePredatorPolicy:
             action[i] = []
         return action
 
+def test(func):
+    def foo(*args, **kwargs):
+        print("Testing:", func.__name__)
+        func(*args, **kwargs)
+    return foo
+
+@test
 def test_in_sight():
     env = PredatorPreyAviary(
         num_predators=2, num_preys=4,
@@ -462,7 +426,7 @@ if __name__ == "__main__":
 
     init_xyzs = env.INIT_XYZS.copy()
     init_xyzs[-1] = env.map_config['prey']['waypoints'][0]
-    obs = env.reset(init_xyzs=init_xyzs)
+    obs = env.reset(init_xyzs="random")
     frames = []
     reward_total = 0
     collision_penalty = 0

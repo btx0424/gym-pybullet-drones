@@ -395,6 +395,9 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
     def _computeInfo(self):
         return np.array([{} for i in range(self.NUM_DRONES)])
 
+    def seed(self, seed=None):
+        self.rng = np.random.default_rng(seed)
+
     def add_camera(self, camera):
         self.cameras.append(camera)
 
