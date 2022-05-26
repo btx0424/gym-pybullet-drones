@@ -25,7 +25,8 @@ class OccupationAviary(BaseMultiagentAviary):
         gui=False,
         obs: ObservationType=ObservationType.KIN,
         episode_len_sec: int=5,
-        observe_obstacles: bool=True
+        observe_obstacles: bool=True,
+        seed = 1
         ):
 
         if obs not in [ObservationType.KIN, ObservationType.KIN20]:
@@ -37,19 +38,42 @@ class OccupationAviary(BaseMultiagentAviary):
 
         self.observe_obstacles = observe_obstacles
         self.obstacles = {}
-        self.goals = {}
+
+        # set seed
+        self.env_seed = seed
+
+        # set goals
+        self.num_goals = num_predators
+        self.goal_size = 0.05 # relative
+        self.goals = np.zeros(shape=(self.num_goals, 6))
+        self.goals[:,3:] = self.goal_size
 
         map_config = map_config or "square"
         if not map_config.endswith(".yaml"):
             map_config = os.path.join(os.path.dirname(__file__), "maps", f"{map_config}.yaml")
         with open(map_config, 'r') as f:
             self.map_config = yaml.safe_load(f)
+
+        min_xyz = np.array(self.map_config["map"]["min_xyz"])
+        max_xyz = np.array(self.map_config["map"]["max_xyz"])
+
+        cell_size = 0.4
+        grid_shape = ((max_xyz - min_xyz) / cell_size).astype(int)
+        centers = np.array(list(np.ndindex(*(grid_shape)))) + 0.5
+        avail = np.ones(len(centers), dtype=bool)
+
         for obstacle_type, obstacle_list in self.map_config['obstacles'].items():
             if obstacle_type == 'box':
-                self.obstacles['box'] = np.split(np.array(obstacle_list), 2, axis=1)
-        for goal_type, goal_list in self.map_config['goals'].items():
-            if goal_type == 'box':
-                self.goals['box'] = np.split(np.array(goal_list), 2, axis=1)
+                box_centers, half_extents = np.split(np.array(obstacle_list), 2, axis=1)
+                for center, half_extent in zip(box_centers, half_extents):
+                    min_corner = ((center-half_extent-min_xyz) / cell_size).astype(int)
+                    max_corner = np.ceil((center+half_extent-min_xyz) / cell_size).astype(int)
+                    mask = (centers > min_corner).all(1) & (centers < max_corner).all(1)
+                    avail[mask] = False
+                self.obstacles['box'] = (box_centers, half_extents)
+
+        self.avail = avail.nonzero()[0]
+        self.grid_centers = centers / grid_shape * (max_xyz-min_xyz) + min_xyz
 
         super().__init__(drone_model=drone_model,
                          num_drones=num_predators,
@@ -71,16 +95,18 @@ class OccupationAviary(BaseMultiagentAviary):
                 self._clipAndNormalizeXYZ(half_extents)[0]
             self.obstacles['box'] = (box_centers, half_extents)
 
-        if 'box' in self.goals.keys():
-            box_centers, half_extents = self.goals['box']
-            box_centers, half_extents = \
-                self._clipAndNormalizeXYZ(box_centers)[0], \
-                self._clipAndNormalizeXYZ(half_extents)[0]
-            self.goals['box'] = (box_centers, half_extents)
-            self.num_goals = box_centers.shape[0]
-
-    def reset(self, init_xyzs=None, init_rpys=None):
-        if init_xyzs is not None: self.INIT_XYZS = init_xyzs
+    def reset(self, init_xyzs="random", init_rpys=None):
+        if isinstance(init_xyzs, np.ndarray):
+            self.INIT_XYZS = init_xyzs
+        elif init_xyzs == "random": 
+            if not hasattr(self, "rng"): self.seed(seed=self.env_seed)
+            sample_pos_idx = self.rng.choice(self.avail, self.NUM_DRONES, replace=False)
+            self.INIT_XYZS = self.grid_centers[sample_pos_idx]
+            # init goal
+            sample_goal_idx = self.rng.choice(self.avail, self.num_goals, replace=False)
+            self.goals_init = self.grid_centers[sample_goal_idx]
+            self.goals[:,0:3] = self.goals_init / self.MAX_XYZ
+            print('goals', self.goals)
         if init_rpys is not None: self.INIT_RPYS = init_rpys
         obs = super().reset()
         self.episode_reward = np.zeros(self.num_agents)
@@ -92,7 +118,7 @@ class OccupationAviary(BaseMultiagentAviary):
         self.obs_split_shapes = []
         if self.observe_obstacles: 
             self.obs_split_shapes.append([len(self.obstacles['box'][0]), 6]) # obstacles
-        self.obs_split_shapes.append([len(self.goals['box'][0]), 6]) # goals
+        self.obs_split_shapes.append([self.num_goals, 6]) # goals
         self.obs_split_shapes.append([self.NUM_DRONES-1, self.single_obs_size]) # other drones
         self.obs_split_shapes.append([1, self.single_obs_size]) # self
         self.obs_split_sections = np.cumsum(
@@ -107,7 +133,7 @@ class OccupationAviary(BaseMultiagentAviary):
         obs = {}
         if self.observe_obstacles:
             boxes = np.concatenate(self.obstacles['box'], axis=1).flatten()
-        goals = np.concatenate(self.goals['box'], axis=1).flatten()
+        goals = np.concatenate(self.goals)
         # TODO@Botian: assym obs?
         for i in self.predators:
             others = np.arange(self.NUM_DRONES) != i
@@ -122,13 +148,16 @@ class OccupationAviary(BaseMultiagentAviary):
 
     def _computeReward(self):
         drone_pos = self.pos[self.predators]
-        goals_pos = self.goals['box'][0]
-        goals_size = self.goals['box'][1]
+        goals_pos = self.goals[:,:-1]
         rewards = np.zeros(self.NUM_DRONES)
         for i in range(self.num_goals):
             dists = [np.linalg.norm(drone_pos[j, 0:3] - goals_pos[i, 0:3])**2 for j in range(self.NUM_DRONES)]
             rewards[i] -= min(dists)
-        
+            
+            # # success reward
+            if min(dists) < self.goal_size:
+                rewards[i] += 10
+
         # collision_penalty
         self.drone_collision = np.array([len(p.getContactPoints(bodyA=drone_id))>0 for drone_id in self.DRONE_IDS])
         self.alive &= ~self.drone_collision
@@ -191,10 +220,8 @@ class OccupationAviary(BaseMultiagentAviary):
                 w, h = half_extent[:2] * 2 * self.MAX_XYZ[:2]
                 ax.add_patch(Rectangle(xy, w, h))
             # goals
-            for center, half_extent in zip(*self.goals['box']):
-                xy = (center[:2] - half_extent[:2]) * self.MAX_XYZ[:2]
-                w, _ = half_extent[:2] * 2 * self.MAX_XYZ[:2]
-                ax.add_patch(Circle(xy, w))
+            for center, half_extent in zip(self.goals[:,:2],self.goals[:,-1]):
+                ax.add_patch(Circle(center, half_extent))
             ax.set_title(
                 f"step {self.step_counter//self.AGGR_PHY_STEPS} "
                 +f"drone_r: {np.sum(self.episode_reward[self.predators])} ")
@@ -230,16 +257,20 @@ class VelDummyPolicy:
     def __init__(self, obs_split_sections) -> None:
         self.obs_split_sections = obs_split_sections
     
-    def __call__(self, states: Dict[int, np.ndarray]) -> Dict[int, np.ndarray]:
+    def __call__(self, num_goals, states: Dict[int, np.ndarray]) -> Dict[int, np.ndarray]:
         actions = {}
         for idx, state in states.items():
             agent_action = np.zeros(7, dtype=np.float32)
             state = np.split(state, self.obs_split_sections[:-1])
-            state_self = state[-1]
-            state_goal = state[5]
-            target_vel = state_goal[:3] - state_self[:3]
+            state_self = state[-1][:3]
+            # 2 goals
+            state_goal = state[4:4+num_goals]
+            state_goal = np.array(state_goal)[:,0:3]
+            dists = np.sum((state_goal - state_self)**2,axis=1)
+            dists_index = np.argwhere(dists==np.min(dists))
+            target_vel = (state_goal[dists_index] - state_self).squeeze(0)
             target_vel /= np.abs(target_vel).max()
-            target_rpy = xyz2rpy(target_vel, True)
+            target_rpy = xyz2rpy(target_vel.squeeze(0), True)
             agent_action[:3] = target_vel
             agent_action[3] = 0.1
             agent_action[4:] = target_rpy
@@ -270,8 +301,9 @@ if __name__ == "__main__":
     import imageio
     import os.path as osp
     from tqdm import tqdm
+    num_drones = 2
     env = OccupationAviary(
-        num_predators=2,
+        num_predators=num_drones,
         aggregate_phy_steps=4, episode_len_sec=20, 
         map_config="square")
     print(env.predators)
@@ -289,16 +321,18 @@ if __name__ == "__main__":
     #     env._clipAndNormalizeXYZ(env.map_config['prey']['waypoints'])[0], 
     #     env.obs_split_sections)
 
-    init_xyzs = env.INIT_XYZS.copy()
-    init_xyzs[-1] = env.map_config['prey']['waypoints'][0]
-    obs = env.reset(init_xyzs=init_xyzs)
+    # init_xyzs = env.INIT_XYZS.copy()
+    # init_xyzs[-1] = env.map_config['prey']['waypoints'][0]
+    obs = env.reset(init_xyzs="random")
+    print('goal_obs',obs[0][24:32])
     frames = []
     reward_total = 0
     collision_penalty = 0
     for i in tqdm(range(env.MAX_PHY_STEPS//env.AGGR_PHY_STEPS)):
         action = {}
         # action.update(predator_policy({i: obs[i] for i in env.predators}))
-        action.update(predator_policy({i: obs[i] for i in env.predators}))
+        action.update(predator_policy(num_drones, {i: obs[i] for i in env.predators}))
+        # print('action', action)
         
         obs, reward, done, info = env.step(action)
         reward_total += sum(reward)

@@ -386,7 +386,7 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
         return np.zeros(self.NUM_DRONES)
 
     def _computeDone(self):
-        if self.step_counter >= self.MAX_PHY_STEPS - self.EPISODE_LEN_SEC:
+        if self.step_counter >= self.MAX_PHY_STEPS - self.AGGR_PHY_STEPS:
             done = np.ones(self.NUM_DRONES, dtype=bool)
         else:
             done = np.zeros(self.NUM_DRONES, dtype=bool)
@@ -394,6 +394,9 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
     
     def _computeInfo(self):
         return np.array([{} for i in range(self.NUM_DRONES)])
+
+    def seed(self, seed=None):
+        self.rng = np.random.default_rng(seed)
 
     def add_camera(self, camera):
         self.cameras.append(camera)
