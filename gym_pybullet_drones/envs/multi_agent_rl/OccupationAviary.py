@@ -220,8 +220,10 @@ class OccupationAviary(BaseMultiagentAviary):
                 w, h = half_extent[:2] * 2 * self.MAX_XYZ[:2]
                 ax.add_patch(Rectangle(xy, w, h))
             # goals
-            for center, half_extent in zip(self.goals[:,:2],self.goals[:,-1]):
-                ax.add_patch(Circle(center, half_extent))
+            for center, half_extent in zip(self.goals[:,:2],self.goals[:,3]):
+                xy = (center - half_extent) * self.MAX_XYZ[:2]
+                w = half_extent * self.MAX_XYZ[0]
+                ax.add_patch(Circle(xy, w))
             ax.set_title(
                 f"step {self.step_counter//self.AGGR_PHY_STEPS} "
                 +f"drone_r: {np.sum(self.episode_reward[self.predators])} ")
@@ -261,13 +263,13 @@ class VelDummyPolicy:
         actions = {}
         for idx, state in states.items():
             agent_action = np.zeros(7, dtype=np.float32)
-            state = np.split(state, self.obs_split_sections[:-1])
-            state_self = state[-1][:3]
-            # 2 goals
-            state_goal = state[4:4+num_goals]
-            state_goal = np.array(state_goal)[:,0:3]
+            state_one = np.split(state, self.obs_split_sections[:-1])
+            state_self = state_one[-1][:3].copy()
+            state_goal = np.array(state_one[4:4+num_goals])[:,0:3]
+
             dists = np.sum((state_goal - state_self)**2,axis=1)
             dists_index = np.argwhere(dists==np.min(dists))
+
             target_vel = (state_goal[dists_index] - state_self).squeeze(0)
             target_vel /= np.abs(target_vel).max()
             target_rpy = xyz2rpy(target_vel.squeeze(0), True)
@@ -275,7 +277,8 @@ class VelDummyPolicy:
             agent_action[3] = 0.1
             agent_action[4:] = target_rpy
             actions[idx] = agent_action
-        return actions    
+        return actions
+
 
 class RulePredatorPolicy:
     """
@@ -324,7 +327,6 @@ if __name__ == "__main__":
     # init_xyzs = env.INIT_XYZS.copy()
     # init_xyzs[-1] = env.map_config['prey']['waypoints'][0]
     obs = env.reset(init_xyzs="random")
-    print('goal_obs',obs[0][24:32])
     frames = []
     reward_total = 0
     collision_penalty = 0
