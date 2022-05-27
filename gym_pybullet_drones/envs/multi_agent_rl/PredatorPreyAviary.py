@@ -214,7 +214,7 @@ class PredatorPreyAviary(BaseMultiagentAviary):
             fig = Figure()
             canvas = FigureCanvasAgg(fig)
             ax = fig.gca()
-            xy = self.pos[:, :2]
+            xy = self.pos[:, :2] * self.MAX_XYZ[:2]
             uv = rpy2xyz(self.rpy)[:, :2]
             ax.quiver(*xy[self.predators].T, *uv[self.predators].T, color="r")
             ax.quiver(*xy[self.preys].T, *uv[self.preys].T, color="b")
