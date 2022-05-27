@@ -63,7 +63,7 @@ class PredatorPreyAviary(BaseMultiagentAviary):
         if not map_config.endswith(".yaml"):
             map_config = os.path.join(os.path.dirname(__file__), "maps", f"{map_config}.yaml")
         with open(map_config, 'r') as f:
-            self.map_config = defaultdict(lambda: {}, yaml.load(f))
+            self.map_config = defaultdict(lambda: {}, yaml.safe_load(f))
         
         min_xyz = np.array(self.map_config["map"]["min_xyz"])
         max_xyz = np.array(self.map_config["map"]["max_xyz"])
@@ -115,7 +115,7 @@ class PredatorPreyAviary(BaseMultiagentAviary):
                 self._clipAndNormalizeXYZ(half_extents)[0]
             self.obstacles['box'] = (box_centers, half_extents)
 
-    def reset(self, init_xyzs=None, init_rpys=None):
+    def reset(self, init_xyzs="random", init_rpys=None):
         if isinstance(init_xyzs, np.ndarray):
             self.INIT_XYZS = init_xyzs
         elif init_xyzs == "random": 
@@ -493,7 +493,7 @@ def test_env():
     env = PredatorPreyAviary(
         num_predators=2, num_preys=2,
         aggregate_phy_steps=4, episode_len_sec=20, 
-        map_config="empty")
+        map_config="split")
     print("obs_split_shapes", env.obs_split_shapes)
     print("obs_split_sections:", env.obs_split_sections)
     predator_policy = VelDummyPolicy(env.obs_split_sections)
