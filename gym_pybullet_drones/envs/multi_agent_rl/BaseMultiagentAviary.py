@@ -316,11 +316,6 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
             raise NotImplementedError(self.OBS_TYPE)
     
     ################################################################################
-    
-    @property
-    def single_obs_size(self):
-        if self.OBS_TYPE == ObservationType.KIN: return 12
-        elif self.OBS_TYPE == ObservationType.KIN20: return 20
 
     def _computeObs(self):
         """Returns the current observation of the environment.
