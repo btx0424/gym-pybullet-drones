@@ -108,7 +108,7 @@ class OccupationAviary(BaseMultiagentAviary):
     def reset(self, init_xyzs="random", init_rpys=None):
         if isinstance(init_xyzs, np.ndarray):
             self.INIT_XYZS = init_xyzs
-            self.goals[:,0:3] = self.INIT_XYZS
+            self.goals[:,0:3] = self.INIT_XYZS / self.MAX_XYZ + 0.1
         elif init_xyzs == "random": 
             if not hasattr(self, "rng"): self.seed(seed=self.env_seed)
             sample_pos_idx = self.rng.choice(self.avail, self.NUM_DRONES, replace=False)
@@ -158,11 +158,11 @@ class OccupationAviary(BaseMultiagentAviary):
         return obs
 
     def _computeReward(self):
-        drone_pos = self.pos[self.predators]
+        drone_pos = self.pos[self.predators] / self.MAX_XYZ
         goals_pos = self.goals[:,:-1]
         rewards = np.zeros(self.NUM_DRONES)
         for i in range(self.num_goals):
-            dists = [np.linalg.norm(drone_pos[j, 0:3] - goals_pos[i, 0:3])**2 for j in range(self.NUM_DRONES)]
+            dists = [np.linalg.norm(drone_pos[j, 0:3] - goals_pos[i, 0:3]) for j in range(self.NUM_DRONES)]
             rewards[i] -= min(dists)
             
             # # success reward
@@ -223,7 +223,7 @@ class OccupationAviary(BaseMultiagentAviary):
             fig = Figure()
             canvas = FigureCanvasAgg(fig)
             ax = fig.gca()
-            xy = self.pos[:, :2] * self.MAX_XYZ[:2]
+            xy = self.pos[:, :2]
             uv = rpy2xyz(self.rpy)[:, :2]
             ax.quiver(*xy[self.predators].T, *uv[self.predators].T, color="r")
             for center, half_extent in zip(*self.obstacles['box']):
