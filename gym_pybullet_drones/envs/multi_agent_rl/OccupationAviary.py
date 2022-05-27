@@ -106,7 +106,6 @@ class OccupationAviary(BaseMultiagentAviary):
             sample_goal_idx = self.rng.choice(self.avail, self.num_goals, replace=False)
             self.goals_init = self.grid_centers[sample_goal_idx]
             self.goals[:,0:3] = self.goals_init / self.MAX_XYZ
-            print('goals', self.goals)
         if init_rpys is not None: self.INIT_RPYS = init_rpys
         obs = super().reset()
         self.episode_reward = np.zeros(self.num_agents)
@@ -279,6 +278,29 @@ class VelDummyPolicy:
             actions[idx] = agent_action
         return actions
 
+class VelZeroPolicy:
+    def __init__(self, obs_split_sections) -> None:
+        self.obs_split_sections = obs_split_sections
+    
+    def __call__(self, num_goals, states: Dict[int, np.ndarray]) -> Dict[int, np.ndarray]:
+        actions = {}
+        for idx, state in states.items():
+            agent_action = np.zeros(7, dtype=np.float32)
+            state_one = np.split(state, self.obs_split_sections[:-1])
+            state_self = state_one[-1][:3].copy()
+            state_goal = np.array(state_one[4:4+num_goals])[:,0:3]
+
+            dists = np.sum((state_goal - state_self)**2,axis=1)
+            dists_index = np.argwhere(dists==np.min(dists))
+
+            target_vel = (state_goal[dists_index] - state_self).squeeze(0)
+            target_vel /= np.abs(target_vel).max()
+            target_rpy = xyz2rpy(target_vel.squeeze(0), True)
+            agent_action[:3] = 0.0
+            agent_action[3] = 0.0
+            agent_action[4:] = target_rpy
+            actions[idx] = agent_action
+        return actions
 
 class RulePredatorPolicy:
     """
@@ -319,7 +341,8 @@ if __name__ == "__main__":
     # obs, _, _, _ = env.step(action)
     # assert env.observation_space.contains(obs)
 
-    predator_policy = VelDummyPolicy(env.obs_split_sections)
+    # predator_policy = VelDummyPolicy(env.obs_split_sections)
+    predator_policy = VelZeroPolicy(env.obs_split_sections)
     # predator_policy = WayPointPolicy(
     #     env._clipAndNormalizeXYZ(env.map_config['prey']['waypoints'])[0], 
     #     env.obs_split_sections)
