@@ -200,16 +200,18 @@ class OccupationAviary(BaseMultiagentAviary):
                     baseCollisionShapeIndex=collisionShapeId,
                     baseVisualShapeIndex=visualShapeId,
                     basePosition=center*self.MAX_XYZ)
-        # # add virtual goals
-        # if 'box' in self.goals.keys():
-        #     for center, half_extent in zip(*self.goals['box']):
-        #         visualShapeId = p.createVisualShape(
-        #             shapeType=p.GEOM_BOX, halfExtents=half_extent*self.MAX_XYZ)
-        #         # collisionShapeId = p.createCollisionShape(
-        #         #     shapeType=p.GEOM_BOX, halfExtents=half_extent*self.MAX_XYZ)
-        #         p.createMultiBody(
-        #             baseVisualShapeIndex=visualShapeId,
-        #             basePosition=center*self.MAX_XYZ)
+        # add virtual goals
+        # goals
+        for center, half_extent in zip(self.goals[:,:3],self.goals[:,3]):
+            visualShapeId = p.createVisualShape(
+                shapeType=p.GEOM_SPHERE, 
+                radius=half_extent*self.MAX_XYZ[0],
+                rgbaColor=[0.5,0.5,0.5,0.5])
+            # collisionShapeId = p.createCollisionShape(
+            #     shapeType=p.GEOM_BOX, halfExtents=half_extent*self.MAX_XYZ)
+            p.createMultiBody(
+                baseVisualShapeIndex=visualShapeId,
+                basePosition=center*self.MAX_XYZ)
 
     def step(self, action):
         obs, reward, done, info = super().step(action)
@@ -352,8 +354,8 @@ if __name__ == "__main__":
         obs, reward, done, info = env.step(action)
         reward_total += sum(reward)
         # collision_penalty += sum(info[j]["collision_penalty"] for j in range(env.num_agents))
-        if i % 6 == 0: frames.append(env.render("mini_map"))
-        # if i % 6 == 0: frames.append(env.render("camera"))
+        # if i % 6 == 0: frames.append(env.render("mini_map"))
+        if i % 6 == 0: frames.append(env.render("camera"))
         if np.all(done): break
 
     imageio.mimsave(
