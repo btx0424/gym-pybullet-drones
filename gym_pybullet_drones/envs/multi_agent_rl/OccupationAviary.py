@@ -27,7 +27,8 @@ class OccupationAviary(BaseMultiagentAviary):
         obs: ObservationType=ObservationType.KIN,
         episode_len_sec: int=5,
         observe_obstacles: bool=True,
-        seed = 1
+        seed = 1,
+        fixed_height = False,
         ):
 
         if obs not in [ObservationType.KIN, ObservationType.KIN20]:
@@ -36,6 +37,7 @@ class OccupationAviary(BaseMultiagentAviary):
         self.fov = fov
         self.predators = list(range(num_predators))
         self.vision_range = vision_range
+        self.fixed_height = fixed_height
 
         self.observe_obstacles = observe_obstacles
         self.obstacles = {}
@@ -45,8 +47,8 @@ class OccupationAviary(BaseMultiagentAviary):
 
         # set goals
         self.num_goals = num_predators
-        self.goal_size = 0.05 # relative
-        self.goals = np.zeros(shape=(self.num_goals, 6))
+        self.goal_size = 0.05 # relative value
+        self.goals = np.zeros(shape=(self.num_goals, 4)) # relative pos + size
         self.goals[:,3:] = self.goal_size
 
         map_config = map_config or "square"
@@ -108,8 +110,10 @@ class OccupationAviary(BaseMultiagentAviary):
     def reset(self, init_xyzs="random", init_rpys=None):
         if isinstance(init_xyzs, np.ndarray):
             self.INIT_XYZS = init_xyzs
-            self.goals[:,0:3] = self.INIT_XYZS / self.MAX_XYZ + 0.1
+            self.goals[:,0:3] = self.INIT_XYZS + 0.1
         elif init_xyzs == "random": 
+            if self.fixed_height:
+                self.grid_centers[:,2] = 1.0
             if not hasattr(self, "rng"): self.seed(seed=self.env_seed)
             sample_pos_idx = self.rng.choice(self.avail, self.NUM_DRONES, replace=False)
             self.INIT_XYZS = self.grid_centers[sample_pos_idx]
@@ -128,7 +132,7 @@ class OccupationAviary(BaseMultiagentAviary):
         self.obs_split_shapes = []
         if self.observe_obstacles: 
             self.obs_split_shapes.append([len(self.obstacles['box'][0]), 6]) # obstacles
-        self.obs_split_shapes.append([self.num_goals, 6]) # goals
+        self.obs_split_shapes.append([self.goals.shape[0], self.goals.shape[1]]) # goals
         state_size = 12 if self.OBS_TYPE == ObservationType.KIN else 20
         self.obs_split_shapes.append([self.NUM_DRONES-1, state_size]) # other drones
         self.obs_split_shapes.append([1, state_size]) # self
@@ -158,15 +162,15 @@ class OccupationAviary(BaseMultiagentAviary):
         return obs
 
     def _computeReward(self):
-        drone_pos = self.pos[self.predators] / self.MAX_XYZ
-        goals_pos = self.goals[:,:-1]
+        drone_pos = self.pos[self.predators] # absolute
+        goals_pos = self.goals[:,0:3] * self.MAX_XYZ # np.max(self.MAX_XYZ)
         rewards = np.zeros(self.NUM_DRONES)
         for i in range(self.num_goals):
-            dists = [np.linalg.norm(drone_pos[j, 0:3] - goals_pos[i, 0:3]) for j in range(self.NUM_DRONES)]
+            dists = [np.linalg.norm(drone_pos[j] - goals_pos[i]) for j in range(self.NUM_DRONES)]
             rewards[i] -= min(dists)
             
             # # success reward
-            if min(dists) < self.goal_size:
+            if min(dists) < self.goal_size * np.max(self.MAX_XYZ):
                 rewards[i] += 10
 
         # collision_penalty
@@ -205,7 +209,7 @@ class OccupationAviary(BaseMultiagentAviary):
         for center, half_extent in zip(self.goals[:,:3],self.goals[:,3]):
             visualShapeId = p.createVisualShape(
                 shapeType=p.GEOM_SPHERE, 
-                radius=half_extent*self.MAX_XYZ[0],
+                radius=half_extent * np.max(self.MAX_XYZ),
                 rgbaColor=[0.5,0.5,0.5,0.5])
             # collisionShapeId = p.createCollisionShape(
             #     shapeType=p.GEOM_BOX, halfExtents=half_extent*self.MAX_XYZ)
@@ -235,7 +239,7 @@ class OccupationAviary(BaseMultiagentAviary):
             # goals
             for center, half_extent in zip(self.goals[:,:2],self.goals[:,3]):
                 xy =  center * self.MAX_XYZ[:2]
-                w = half_extent * self.MAX_XYZ[0]
+                w = half_extent * np.max(self.MAX_XYZ)
                 ax.add_patch(Circle(xy, w))
             ax.set_title(
                 f"step {self.step_counter//self.AGGR_PHY_STEPS} "
@@ -341,7 +345,8 @@ if __name__ == "__main__":
 
     init_xyzs = env.INIT_XYZS.copy()
     # init_xyzs[-1] = env.map_config['prey']['waypoints'][0]
-    obs = env.reset(init_xyzs=init_xyzs)
+    # obs = env.reset(init_xyzs=init_xyzs)
+    obs = env.reset()
     frames = []
     reward_total = 0
     collision_penalty = 0
@@ -359,7 +364,7 @@ if __name__ == "__main__":
         if np.all(done): break
 
     imageio.mimsave(
-        osp.join(osp.dirname(osp.abspath(__file__)), f"test_{env.__class__.__name__}_{reward_total}.gif"),
+        osp.join(osp.dirname(osp.abspath(__file__)), f"test_camera_{env.__class__.__name__}_{reward_total}.gif"),
         ims=frames,
         format="GIF"
     )
