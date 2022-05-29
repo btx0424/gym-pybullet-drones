@@ -8,9 +8,9 @@ def xyz2rpy(xyz: np.ndarray, normalize=False) -> np.ndarray:
     rpy = np.stack([
         np.zeros_like(x), 
         np.arcsin(z), 
-        np.arctan2(y, x)])
+        np.arctan2(y, x)]).T
     if normalize: rpy /= MAX_RPY
-    return rpy.T
+    return rpy
 
 def rpy2xyz(rpy: np.ndarray) -> np.ndarray:
     roll, pitch, yaw = rpy.T # rpy is of shape (*, 3)
