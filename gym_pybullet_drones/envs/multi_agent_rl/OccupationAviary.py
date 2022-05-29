@@ -29,13 +29,19 @@ class OccupationAviary(BaseMultiagentAviary):
         observe_obstacles: bool=True,
         seed = 1,
         fixed_height = False,
+        random_agent = False
         ):
 
         if obs not in [ObservationType.KIN, ObservationType.KIN20]:
             raise NotImplementedError(obs)
 
+        if random_agent:
+            num_agents = np.random.randint(2, num_predators)
+        else:
+            num_agents = num_predators
+
         self.fov = fov
-        self.predators = list(range(num_predators))
+        self.predators = list(range(num_agents))
         self.vision_range = vision_range
         self.fixed_height = fixed_height
 
@@ -46,7 +52,7 @@ class OccupationAviary(BaseMultiagentAviary):
         self.env_seed = seed
 
         # set goals
-        self.num_goals = num_predators
+        self.num_goals = num_agents
         self.goal_size = 0.05 # relative value
         self.goals = np.zeros(shape=(self.num_goals, 4)) # relative pos + size
         self.goals[:,3:] = self.goal_size
@@ -88,7 +94,7 @@ class OccupationAviary(BaseMultiagentAviary):
         self.grid_centers = centers / grid_shape * (max_xyz-min_xyz) + min_xyz
 
         super().__init__(drone_model=drone_model,
-                         num_drones=num_predators,
+                         num_drones=num_agents,
                          physics=Physics.PYB,
                          freq=freq,
                          aggregate_phy_steps=aggregate_phy_steps,
@@ -276,14 +282,13 @@ class VelDummyPolicy:
     def __init__(self, obs_split_sections) -> None:
         self.obs_split_sections = obs_split_sections
     
-    def __call__(self, num_goals, states: Dict[int, np.ndarray]) -> Dict[int, np.ndarray]:
+    def __call__(self, num_obstacles, num_goals, states: Dict[int, np.ndarray]) -> Dict[int, np.ndarray]:
         actions = {}
         for idx, state in states.items():
             agent_action = np.zeros(7, dtype=np.float32)
             state_one = np.split(state, self.obs_split_sections[:-1])
             state_self = state_one[-1][:3].copy()
-            state_goal = np.array(state_one[4:4+num_goals])[:,0:3]
-
+            state_goal = np.array(state_one[num_obstacles:num_obstacles+num_goals])[:,0:3]
             dists = np.sum((state_goal - state_self)**2,axis=1)
             dists_index = np.argwhere(dists==np.min(dists))
 
@@ -304,12 +309,6 @@ class VelZeroPolicy:
         actions = {}
         for idx, state in states.items():
             agent_action = np.zeros(7, dtype=np.float32)
-            state_one = np.split(state, self.obs_split_sections[:-1])
-            state_self = state_one[-1][:3].copy()
-            state_goal = np.array(state_one[4:4+num_goals])[:,0:3]
-
-            dists = np.sum((state_goal - state_self)**2,axis=1)
-            dists_index = np.argwhere(dists==np.min(dists))
             target_vel = np.zeros(3)
             target_rpy = xyz2rpy(target_vel, True)
             agent_action[:3] = 0.0
@@ -323,10 +322,12 @@ if __name__ == "__main__":
     import os.path as osp
     from tqdm import tqdm
     num_drones = 2
+    num_obstacles = 6
     env = OccupationAviary(
         num_predators=num_drones,
-        aggregate_phy_steps=4, episode_len_sec=20, 
-        map_config="square")
+        aggregate_phy_steps=4, episode_len_sec=5, 
+        map_config="mini_square",
+        fixed_height=True)
     print(env.predators)
     print(env.obs_split_shapes)
     print(env.obs_split_sections)
@@ -337,8 +338,8 @@ if __name__ == "__main__":
     # obs, _, _, _ = env.step(action)
     # assert env.observation_space.contains(obs)
 
-    # predator_policy = VelDummyPolicy(env.obs_split_sections)
-    predator_policy = VelZeroPolicy(env.obs_split_sections)
+    predator_policy = VelDummyPolicy(env.obs_split_sections)
+    # predator_policy = VelZeroPolicy(env.obs_split_sections)
     # predator_policy = WayPointPolicy(
     #     env._clipAndNormalizeXYZ(env.map_config['prey']['waypoints'])[0], 
     #     env.obs_split_sections)
@@ -351,16 +352,17 @@ if __name__ == "__main__":
     reward_total = 0
     collision_penalty = 0
     for i in tqdm(range(env.MAX_PHY_STEPS//env.AGGR_PHY_STEPS)):
+        pdb.set_trace()
         action = {}
         # action.update(predator_policy({i: obs[i] for i in env.predators}))
-        action.update(predator_policy(num_drones, {i: obs[i] for i in env.predators}))
+        action.update(predator_policy(num_obstacles, num_drones, {i: obs[i] for i in env.predators}))
         # print('action', action)
         
         obs, reward, done, info = env.step(action)
         reward_total += sum(reward)
         # collision_penalty += sum(info[j]["collision_penalty"] for j in range(env.num_agents))
-        # if i % 6 == 0: frames.append(env.render("mini_map"))
-        if i % 6 == 0: frames.append(env.render("camera"))
+        if i % 6 == 0: frames.append(env.render("mini_map"))
+        # if i % 6 == 0: frames.append(env.render("camera"))
         if np.all(done): break
 
     imageio.mimsave(
