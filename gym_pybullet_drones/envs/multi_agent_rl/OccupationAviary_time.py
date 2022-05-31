@@ -13,13 +13,13 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.patches import Rectangle, Circle
 import pdb
 
-class OccupationAviary_empty(BaseMultiagentAviary):
+class OccupationAviary_time(BaseMultiagentAviary):
     def __init__(self,
         num_predators: int=3,
         fov: float=np.pi/2,
         vision_range: float=np.inf,
         *,
-        map_config = "mini_empty",
+        map_config = "empty",
         drone_model: DroneModel=DroneModel.CF2X,
         freq: int=120,
         aggregate_phy_steps: int=1,
@@ -100,8 +100,7 @@ class OccupationAviary_empty(BaseMultiagentAviary):
         self.timestep = 0
         if isinstance(init_xyzs, np.ndarray):
             self.INIT_XYZS = init_xyzs
-            # self.goals[:,0:3] = self.INIT_XYZS + 0.1
-            self.goals[:,0:3] = np.array([[0.5,0.5,1.0],[0.5,0.5,0.5]])
+            self.goals[:,0:3] = self.INIT_XYZS + 0.1
         elif init_xyzs == "random": 
             if self.fixed_height:
                 self.grid_centers[:,2] = 1.0
@@ -127,6 +126,7 @@ class OccupationAviary_empty(BaseMultiagentAviary):
         self.obs_split_shapes.append([self.goals.shape[0], self.goals.shape[1]]) # goals
         state_size = 12 if self.OBS_TYPE == ObservationType.KIN else 20
         self.obs_split_shapes.append([self.NUM_DRONES-1, state_size]) # other drones
+        self.obs_split_shapes.append([1,1]) # timestep
         self.obs_split_shapes.append([1, state_size]) # self
         self.obs_split_sections = np.cumsum(
             np.concatenate([[dim]*num for num, dim in self.obs_split_shapes]))
@@ -149,6 +149,7 @@ class OccupationAviary_empty(BaseMultiagentAviary):
                 obs_states.append(boxes) # obstacles
             obs_states.append(goals) # goals
             obs_states.append(states[others].flatten()) # other drones
+            obs_states.append([self.timestep / self.global_max_steps]) # timestep
             obs_states.append(states[i]) # self
             obs[i] = np.concatenate(obs_states)
         return obs
@@ -176,7 +177,7 @@ class OccupationAviary_empty(BaseMultiagentAviary):
             self.exe_time = self.global_max_steps
 
         # time penalty
-        # rewards -= (self.timestep / self.global_max_steps) * 5
+        rewards -= (self.timestep / self.global_max_steps) * 5
 
         # collision_penalty
         self.drone_collision = np.array([len(p.getContactPoints(bodyA=drone_id))>0 for drone_id in self.DRONE_IDS])
@@ -195,7 +196,7 @@ class OccupationAviary_empty(BaseMultiagentAviary):
     def _computeInfo(self):
         info = super()._computeInfo()
         # for i in range(self.num_agents):
-        #     info[i]["collision_penalty"] = -int(self.drone_collision[i])
+        #     info[i]["success_rate"] = self.success
         return info
 
     # TODO@jiayu, rejection placement for obstacles and goals
@@ -295,7 +296,7 @@ class VelDummyPolicy:
             dists_index = np.argwhere(dists==np.min(dists))
 
             target_vel = (state_goal[dists_index] - state_self).squeeze(0)
-            target_vel /= (np.abs(target_vel).max() + 1e-5)
+            target_vel /= np.abs(target_vel).max()
             target_rpy = xyz2rpy(target_vel.squeeze(0), True)
             agent_action[:3] = target_vel
             agent_action[3] = 0.5
@@ -341,10 +342,10 @@ if __name__ == "__main__":
     from tqdm import tqdm
     num_drones = 2
     num_obstacles = 0
-    env = OccupationAviary_empty(
+    env = OccupationAviary_time(
         num_predators=num_drones,
         aggregate_phy_steps=4, episode_len_sec=15, 
-        map_config="mini_empty",
+        map_config="empty",
         fixed_height=True)
     print(env.predators)
     print(env.obs_split_shapes)
@@ -364,10 +365,9 @@ if __name__ == "__main__":
     #     env.obs_split_sections)
 
     init_xyzs = env.INIT_XYZS.copy()
-    init_xyzs = np.array([[-1.0,-1.0,1.0],[-1.0,-1.0,0.5]])
     # init_xyzs[-1] = env.map_config['prey']['waypoints'][0]
-    obs = env.reset(init_xyzs=init_xyzs)
-    # obs = env.reset()
+    # obs = env.reset(init_xyzs=init_xyzs)
+    obs = env.reset()
     frames = []
     reward_total = 0
     collision_penalty = 0
