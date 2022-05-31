@@ -10,7 +10,7 @@ from gym_pybullet_drones.utils import xyz2rpy, rpy2xyz
 from typing import Dict, List, Tuple
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Rectangle, Circle
 from collections import defaultdict
 import heapq
 
@@ -63,34 +63,45 @@ class PredatorPreyAviary(BaseMultiagentAviary):
         if not map_config.endswith(".yaml"):
             map_config = os.path.join(os.path.dirname(__file__), "maps", f"{map_config}.yaml")
         with open(map_config, 'r') as f:
-            self.map_config = defaultdict(lambda: {}, yaml.safe_load(f))
+            self.map_config = yaml.safe_load(f)
         
         min_xyz = np.array(self.map_config["map"]["min_xyz"])
         max_xyz = np.array(self.map_config["map"]["max_xyz"])
         
-        if "box" not in self.map_config["obstacles"].keys():
-            self.map_config["obstacles"]["box"] = []
-        self.map_config["obstacles"]["box"] += [
-            [min_xyz[0]-0.1, 0, 1, 0.1, max_xyz[1], 1],
-            [0, max_xyz[1]+0.1, 1, max_xyz[0], 0.1, 1],
-            [max_xyz[0]+0.1, 0, 1, 0.1, max_xyz[1], 1],
-            [0, min_xyz[1]-0.1, 1, max_xyz[0], 0.1, 1]
-        ]
+        if self.map_config["map"]["wall"]: 
+            if "box" not in self.map_config["obstacles"].keys():
+                self.map_config["obstacles"]["box"] = []
+            self.map_config["obstacles"]["box"] += [
+                [min_xyz[0]-0.1, 0, 1, 0.1, max_xyz[1], 1],
+                [0, max_xyz[1]+0.1, 1, max_xyz[0], 0.1, 1],
+                [max_xyz[0]+0.1, 0, 1, 0.1, max_xyz[1], 1],
+                [0, min_xyz[1]-0.1, 1, max_xyz[0], 0.1, 1]
+            ]
 
         cell_size = 0.4
         grid_shape = ((max_xyz - min_xyz) / cell_size).astype(int)
         centers = np.array(list(np.ndindex(*(grid_shape)))) + 0.5
         avail = np.ones(len(centers), dtype=bool)
 
-        for obstacle_type, obstacle_list in self.map_config["obstacles"].items():
-            if obstacle_type == 'box':
-                box_centers, half_extents = np.split(np.array(obstacle_list), 2, axis=1)
-                for center, half_extent in zip(box_centers, half_extents):
-                    min_corner = ((center-half_extent-min_xyz) / cell_size).astype(int)
-                    max_corner = np.ceil((center+half_extent-min_xyz) / cell_size).astype(int)
-                    mask = (centers > min_corner).all(1) & (centers < max_corner).all(1)
-                    avail[mask] = False
-                self.obstacles['box'] = (box_centers, half_extents)
+        if 'obstacles' in self.map_config.keys():
+            for obstacle_type, obstacle_list in self.map_config["obstacles"].items():
+                if obstacle_type == 'box':
+                    box_centers, half_extents = np.split(np.array(obstacle_list), 2, axis=1)
+                    for center, half_extent in zip(box_centers, half_extents):
+                        min_corner = ((center-half_extent-min_xyz) / cell_size).astype(int)
+                        max_corner = np.ceil((center+half_extent-min_xyz) / cell_size).astype(int)
+                        mask = (centers > min_corner).all(1) & (centers < max_corner).all(1)
+                        avail[mask] = False
+                    self.obstacles['box'] = (box_centers, half_extents)
+                if obstacle_type == 'cylinder':
+                    cylinder_centers, radiuses = np.split(np.array(obstacle_list), [3], axis=1)
+                    print(cylinder_centers, radiuses)
+                    for center, radius in zip(cylinder_centers, radiuses):
+                        min_corner = ((center-radius-min_xyz) / cell_size).astype(int)
+                        max_corner = np.ceil((center+radius-min_xyz) / cell_size).astype(int)
+                        mask = (centers > min_corner).all(1) & (centers < max_corner).all(1)
+                        avail[mask] = False
+                    self.obstacles['cylinder'] = (cylinder_centers, radiuses)
 
         self.avail = avail.nonzero()[0]
         self.grid_centers = centers / grid_shape * (max_xyz-min_xyz) + min_xyz
@@ -108,12 +119,19 @@ class PredatorPreyAviary(BaseMultiagentAviary):
                          min_xyz=self.map_config["map"]["min_xyz"])
         self.num_agents = self.NUM_DRONES
 
-        if 'box' in self.obstacles.keys():
-            box_centers, half_extents = self.obstacles['box']
-            box_centers, half_extents = \
-                self._clipAndNormalizeXYZ(box_centers)[0], \
-                self._clipAndNormalizeXYZ(half_extents)[0]
-            self.obstacles['box'] = (box_centers, half_extents)
+        if 'obstacles' in self.map_config.keys():
+            if 'box' in self.obstacles.keys():
+                box_centers, half_extents = self.obstacles['box']
+                box_centers, half_extents = \
+                    self._clipAndNormalizeXYZ(box_centers)[0], \
+                    self._clipAndNormalizeXYZ(half_extents)[0]
+                self.obstacles['box'] = (box_centers, half_extents)
+            if 'cylinder' in self.obstacles.keys():
+                cylinder_centers, radiuses = self.obstacles['cylinder']
+                cylinder_centers, radiuses = \
+                    self._clipAndNormalizeXYZ(cylinder_centers)[0], \
+                    radiuses / self.map_config["map"]["max_xyz"][0]
+                self.obstacles['cylinder'] = (cylinder_centers, radiuses)
 
     def reset(self, init_xyzs="random", init_rpys=None):
         if isinstance(init_xyzs, np.ndarray):
@@ -132,7 +150,8 @@ class PredatorPreyAviary(BaseMultiagentAviary):
     def _observationSpace(self) -> spaces.Dict:
         self.obs_split_shapes = []
         if self.observe_obstacles: 
-            self.obs_split_shapes.append([len(self.obstacles['box'][0]), 6])
+            if 'box' in self.obstacles.keys(): self.obs_split_shapes.append([len(self.obstacles['box'][0]), 6])
+            if 'cylinder' in self.obstacles.keys(): self.obs_split_shapes.append([len(self.obstacles['cylinder'][0]), 4])
         state_size = 12 if self.OBS_TYPE == ObservationType.KIN else 20
         self.obs_split_shapes.append([self.num_predators, state_size])
         self.obs_split_shapes.append([self.num_preys, state_size])
@@ -148,11 +167,13 @@ class PredatorPreyAviary(BaseMultiagentAviary):
         states = np.stack(list(super()._computeObs().values()))
         obs = {}
         if self.observe_obstacles:
-            boxes = np.concatenate(self.obstacles['box'], axis=1).flatten()
+            if 'box' in self.obstacles.keys(): boxes = np.concatenate(self.obstacles['box'], axis=1).flatten()
+            if 'cylinder' in self.obstacles.keys(): cylinders = np.concatenate(self.obstacles['cylinder'], axis=1).flatten()
         for i in self.predators + self.preys:
             obs_states = []
             if self.observe_obstacles:
-                obs_states.append(boxes)
+                if 'box' in self.obstacles.keys(): obs_states.append(boxes)
+                if 'cylinder' in self.obstacles.keys(): obs_states.append(cylinders)
             obs_states.append(states[self.predators].flatten())
             obs_states.append(states[self.preys].flatten())
             obs_states.append(states[i])
@@ -160,22 +181,34 @@ class PredatorPreyAviary(BaseMultiagentAviary):
         return obs
 
     def _computeReward(self):
-        rayFromPositions = self.pos[self.predators]
-        rayToPositions = self.pos[self.preys]
+        from_pos = self.pos[self.predators]
+        to_pos = self.pos[self.preys]
         ori = rpy2xyz(self.rpy[self.predators]) # (n_predators, 3)
-        in_sight = in_sight_test(rayFromPositions, rayToPositions, ori, self.fov, self.preys, self.vision_range)
+
+        d = to_pos[:, None] - from_pos # (n_prey, n_predators, 3)
+        distance = np.linalg.norm(d, axis=-1, keepdims=True)
+        d /= distance
+        
+        in_fov = ((d * ori).sum(-1) > np.cos(self.fov/2)) # 
+        hit_id = np.array([hit[0] for hit in p.rayTestBatch(
+            rayFromPositions=np.tile(from_pos.T, len(to_pos)).T.reshape(-1, 3),
+            rayToPositions=np.tile(to_pos, len(from_pos)).reshape(-1, 3),
+        )]).reshape(len(to_pos), len(from_pos)) - 1
+        hit = (hit_id.T == np.array(self.preys)).T
+
+        in_sight = hit & in_fov & (distance.squeeze() < self.vision_range) # (prey, predators)
 
         reward = np.zeros(self.NUM_DRONES)
-        reward[self.predators] = np.sum(in_sight.any(1)) / self.num_predators
-        reward[self.preys] = -np.sum(in_sight.any(1)) / self.num_preys
+        reward[self.predators] = np.sum(in_sight.any(1) * np.exp(-distance.min(-1))) / self.num_predators
+        reward[self.preys] = -np.sum(in_sight.any(1) * np.exp(-distance.min(-1))) / self.num_preys
         assert reward.sum() == 0
         
         # collision_penalty
         self.drone_collision = np.array([len(p.getContactPoints(bodyA=drone_id))>0 for drone_id in self.DRONE_IDS])
-        reward -= self.drone_collision.astype(np.float32) * 5
+        reward -= self.drone_collision.astype(np.float32)
         
         self.episode_reward += reward
-        self.collision_penalty += self.drone_collision.astype(np.float32) * 5
+        self.collision_penalty += self.drone_collision.astype(np.float32)
         self.alive[self.collision_penalty > 100] = False
         return reward
         # return reward * self.alive
@@ -203,6 +236,16 @@ class PredatorPreyAviary(BaseMultiagentAviary):
                     baseCollisionShapeIndex=collisionShapeId,
                     baseVisualShapeIndex=visualShapeId,
                     basePosition=center*self.MAX_XYZ)
+        if 'cylinder' in self.obstacles.keys():
+            for center, radius in zip(*self.obstacles['cylinder']):
+                visualShapeId = p.createVisualShape(
+                    shapeType=p.GEOM_CYLINDER, radius=radius*self.MAX_XYZ[0], length=self.MAX_XYZ[2])
+                collisionShapeId = p.createCollisionShape(
+                    shapeType=p.GEOM_CYLINDER, radius=radius*self.MAX_XYZ[0], height=self.MAX_XYZ[2])
+                p.createMultiBody(
+                    baseCollisionShapeIndex=collisionShapeId,
+                    baseVisualShapeIndex=visualShapeId,
+                    basePosition=center*self.MAX_XYZ)
 
     def step(self, action):
         obs, reward, done, info = super().step(action)
@@ -219,10 +262,14 @@ class PredatorPreyAviary(BaseMultiagentAviary):
             uv = rpy2xyz(self.rpy)[:, :2]
             ax.quiver(*xy[self.predators].T, *uv[self.predators].T, color="r")
             ax.quiver(*xy[self.preys].T, *uv[self.preys].T, color="b")
-            for center, half_extent in zip(*self.obstacles['box']):
-                xy = (center[:2] - half_extent[:2]) * self.MAX_XYZ[:2]
-                w, h = half_extent[:2] * 2 * self.MAX_XYZ[:2]
-                ax.add_patch(Rectangle(xy, w, h))
+            if 'box' in self.obstacles.keys(): 
+                for center, half_extent in zip(*self.obstacles['box']):
+                    xy = (center[:2] - half_extent[:2]) * self.MAX_XYZ[:2]
+                    w, h = half_extent[:2] * 2 * self.MAX_XYZ[:2]
+                    ax.add_patch(Rectangle(xy, w, h))
+            if 'cylinder' in self.obstacles.keys():
+                for center, radius in zip(*self.obstacles['cylinder']):
+                    ax.add_patch(Circle(center[:2] * self.MAX_XYZ[:2], radius*self.MAX_XYZ[0]))
             ax.set_title(
                 f"step {self.step_counter//self.AGGR_PHY_STEPS} "
                 +f"predator_r: {np.sum(self.episode_reward[self.predators])} "
@@ -233,6 +280,78 @@ class PredatorPreyAviary(BaseMultiagentAviary):
             return np.frombuffer(buffer, np.uint8).reshape(height, width, -1)
         else:
             raise NotImplementedError(mode)
+
+class WayPointPolicy:
+    def __init__(self, waypoints, obs_split_sections) -> None:
+        self.waypoints = waypoints
+        self.waypoint_cnt = 0
+        self.obs_split_sections = obs_split_sections
+    
+    def __call__(self, states: Dict[int, np.ndarray]) -> Dict[int, np.ndarray]:
+        actions = {}
+        for idx, state in states.items():
+            agent_action = np.zeros(7, dtype=np.float32)
+            state_self = np.split(state, self.obs_split_sections[:-1])[-1]
+            waypoint = self.waypoints[self.waypoint_cnt]
+            target_vel = waypoint - state_self[:3]
+            target_rpy = xyz2rpy(target_vel, True)
+            agent_action[:3] = target_vel
+            agent_action[3] = 1.1
+            agent_action[4:] = target_rpy
+            if np.linalg.norm(target_vel) < 0.05: self.waypoint_cnt = (self.waypoint_cnt + 1) % len(self.waypoints)
+            actions[idx] = agent_action
+        return actions
+
+class VelDummyPolicy:
+    def __init__(self, obs_split_sections, vel=0.5) -> None:
+        self.obs_split_sections = obs_split_sections
+        self.vel = vel
+
+    def __call__(self, states: Dict[int, np.ndarray]) -> Dict[int, np.ndarray]:
+        actions = {}
+        for idx, state in states.items():
+            agent_action = np.zeros(7, dtype=np.float32)
+            state_prey, state_self = np.split(state, self.obs_split_sections[:-1])[-2:]
+            target_vel = state_prey[:3] - state_self[:3]
+            target_vel /= np.abs(target_vel).max()
+            target_rpy = xyz2rpy(target_vel, True)
+            agent_action[:3] = target_vel
+            agent_action[3] = self.vel
+            agent_action[4:] = target_rpy
+            actions[idx] = agent_action
+        return actions    
+
+class RulePreyPolicy:
+    def __init__(self, 
+            map_config,
+            predator_indexes, 
+            prey_indexes, 
+            obs_split_sections,
+            vel=1):
+        
+        self.predator_indexes = np.array(predator_indexes) - len(prey_indexes) - len(predator_indexes) - 1
+        self.prey_indexes = np.array(prey_indexes) - len(prey_indexes) - 1
+        self.obs_split_sections = obs_split_sections
+        self.vel = vel
+
+    def __call__(self, states: Dict[int, np.ndarray]) -> Dict[int, np.ndarray]:
+        actions = {}
+        for prey, state in states.items():
+            state = np.split(state, self.obs_split_sections[:-1])
+            pos_self = state[-1][:3]
+            pos_predators = np.stack([state[predator] for predator in self.predator_indexes])[:, :3]
+            pos_wall = pos_self / (np.linalg.norm(pos_self)+1e-6) * np.sqrt(2)
+            d_squares = np.sum((pos_predators - pos_self)**2, axis=1, keepdims=True)
+            agent_action = np.zeros(7, dtype=np.float32)
+            target_vel = np.sum((pos_self - pos_predators) / (d_squares + 1e-6), axis=0)
+            target_vel += (pos_self - pos_wall) / (np.sum((pos_wall - pos_self)**2+1e-6))
+            target_vel += np.array([0, 0, 1/(pos_self[2]**2 + 1e-6)])
+            target_vel += np.random.random(3) * 0.1
+            agent_action[:3] = target_vel
+            agent_action[3] = self.vel
+            agent_action[4:] = xyz2rpy(target_vel, True)
+            actions[prey] = agent_action
+        return actions
 
 class PredatorAviary(PredatorPreyAviary):
     def __init__(self, 
@@ -249,7 +368,7 @@ class PredatorAviary(PredatorPreyAviary):
             episode_len_sec=5,
             observe_obstacles: bool=True):
         self.prey = num_predators
-        super().__init__(num_predators, 1, fov, vision_range,
+        super().__init__(num_predators, num_preys, fov, vision_range,
             map_config=map_config,
             drone_model=drone_model, freq=freq, 
             aggregate_phy_steps=aggregate_phy_steps, 
@@ -258,8 +377,9 @@ class PredatorAviary(PredatorPreyAviary):
         
         self.num_agents = len(self.predators)
         self.waypoints = np.array(self.map_config['prey']['waypoints'])
-        self.prey_policy = WayPointPolicy(
-            self._clipAndNormalizeXYZ(self.waypoints)[0], self.obs_split_sections)
+        self.prey_policy = RulePreyPolicy(
+            self.map_config, self.predators, self.preys, self.obs_split_sections
+        )
 
     def _actionSpace(self) -> spaces.Dict:
         action_space = super()._actionSpace()
@@ -299,64 +419,6 @@ class PredatorAviary(PredatorPreyAviary):
         info = super()._computeInfo()
         return info[self.predators]
 
-
-class WayPointPolicy:
-    def __init__(self, waypoints, obs_split_sections) -> None:
-        self.waypoints = waypoints
-        self.waypoint_cnt = 0
-        self.obs_split_sections = obs_split_sections
-    
-    def __call__(self, states: Dict[int, np.ndarray]) -> Dict[int, np.ndarray]:
-        actions = {}
-        for idx, state in states.items():
-            agent_action = np.zeros(7, dtype=np.float32)
-            state_self = np.split(state, self.obs_split_sections[:-1])[-1]
-            waypoint = self.waypoints[self.waypoint_cnt]
-            target_vel = waypoint - state_self[:3]
-            target_rpy = xyz2rpy(target_vel, True)
-            agent_action[:3] = target_vel
-            agent_action[3] = 1.1
-            agent_action[4:] = target_rpy
-            if np.linalg.norm(target_vel) < 0.05: self.waypoint_cnt = (self.waypoint_cnt + 1) % len(self.waypoints)
-            actions[idx] = agent_action
-        return actions
-
-class VelDummyPolicy:
-    def __init__(self, obs_split_sections) -> None:
-        self.obs_split_sections = obs_split_sections
-    
-    def __call__(self, states: Dict[int, np.ndarray]) -> Dict[int, np.ndarray]:
-        actions = {}
-        for idx, state in states.items():
-            agent_action = np.zeros(7, dtype=np.float32)
-            state_prey, state_self = np.split(state, self.obs_split_sections[:-1])[-2:]
-            target_vel = state_prey[:3] - state_self[:3]
-            target_vel /= np.abs(target_vel).max()
-            target_rpy = xyz2rpy(target_vel, True)
-            agent_action[:3] = target_vel
-            agent_action[3] = 0.1
-            agent_action[4:] = target_rpy
-            actions[idx] = agent_action
-        return actions    
-
-class RulePreyPolicy:
-    def __init__(self, 
-            predator_indexes, 
-            prey_indexes, 
-            obs_split_sections):
-        raise NotImplementedError
-        self.predator_indexes = predator_indexes
-        self.prey_indexes = prey_indexes,
-        self.obs_split_sections = obs_split_sections
-
-    def __call__(self, states: Dict[int, np.ndarray]) -> Dict[int, np.ndarray]:
-        for prey, state in states.items:
-            state = np.split(state, self.obs_split_sections[:-1])
-            pos_self = state[-1]
-            pos_predators = state[self.predator_indexes]
-
-        return
-
 class RulePredatorPolicy:
     """
     A policy that uses A* search to find a shortest path from each predator to a prey.
@@ -366,6 +428,7 @@ class RulePredatorPolicy:
             predator_indexes, 
             prey_indexes, 
             obs_split_sections):
+        raise NotImplementedError("Not correctly implemented yet.")
         self.map_config = map_config
         self.predator_indexes = predator_indexes
         self.prey_indexes = prey_indexes,
@@ -524,47 +587,11 @@ def test_env():
     print(reward_total, done)
 
 @test
-def test_predator_rule_policy():
-    env = PredatorPreyAviary(
-        num_predators=1, num_preys=1,
-        aggregate_phy_steps=4, episode_len_sec=20, 
-        map_config="square")
-    predator_policy = RulePredatorPolicy(env.map_config, env.predators, env.preys, env.obs_split_sections)
-    import matplotlib.pyplot as plt
-    plt.imshow(predator_policy.is_obstacle.any(-1))
-    plt.show()
-    obs = env.reset(init_xyzs="random")
-    frames = []
-    reward_total = 0
-    try:
-        for i in tqdm(range(env.MAX_PHY_STEPS//env.AGGR_PHY_STEPS)):
-            action = {}
-            action.update(predator_policy({i: obs[i] for i in env.predators}))
-            action.update({i: np.zeros(7) for i in env.preys})
-            
-            obs, reward, done, info = env.step(action)
-            reward_total += sum(reward)
-            if np.all(done): break
-            if i % 3 == 0: frames.append(env.render("mini_map"))
-    except Exception as e:
-        print(e)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        imageio.mimsave(
-            osp.join(osp.dirname(osp.abspath(__file__)), f"test_{env.__class__.__name__}_{reward_total}.gif"),
-            ims=frames,
-            format="GIF"
-        )
-        print(env.pos)
-        print(reward_total, done)
-
-@test
 def test_predator_aviary():
     env = PredatorAviary(
         num_predators=2, num_preys=1,
         aggregate_phy_steps=4, episode_len_sec=20, 
-        map_config="square")
+        map_config="arena")
     print("obs_split_shapes", env.obs_split_shapes)
     print("obs_split_sections:", env.obs_split_sections)
     predator_policy = VelDummyPolicy(env.obs_split_sections)
@@ -590,11 +617,46 @@ def test_predator_aviary():
     print(env.pos)
     print(reward_total, done)
 
+@test
+def test_rule_prey():
+    env = PredatorPreyAviary(
+        num_predators=2, num_preys=1,
+        aggregate_phy_steps=4, episode_len_sec=20, 
+        map_config="arena")
+    print("obs_split_shapes", env.obs_split_shapes)
+    print("obs_split_sections:", env.obs_split_sections)
+    predator_policy = VelDummyPolicy(env.obs_split_sections, vel=0.8)
+    prey_policy = RulePreyPolicy(env.map_config, env.predators, env.preys, env.obs_split_sections)
+    # obs = env.reset(init_xyzs=np.array([[-1,0,0.3], [1,0,0.3], [0.5, 1, 0.3]]))
+    obs = env.reset()
+    frames = []
+    reward_total = 0
+    
+    for i in tqdm(range(env.MAX_PHY_STEPS//env.AGGR_PHY_STEPS)):
+        action = {}
+        action.update({i: np.zeros(7) for i in env.predators})
+        action.update(predator_policy({i: obs[i] for i in env.predators}))
+        action.update(prey_policy({i: obs[i] for i in env.preys}))
+        
+        obs, reward, done, info = env.step(action)
+        reward_total += sum(reward)
+        if np.all(done): break
+        if i % 4 == 0: frames.append(env.render("mini_map"))
+    
+    imageio.mimsave(
+        osp.join(osp.dirname(osp.abspath(__file__)), f"test_{env.__class__.__name__}_{reward_total}.gif"),
+        ims=frames,
+        format="GIF"
+    )
+    print(env.pos)
+    print(reward_total, done)
+
 if __name__ == "__main__":
     import imageio
     import os.path as osp
     from tqdm import tqdm
 
-    test_in_sight()
+    # test_in_sight()
     # test_env()
     test_predator_aviary()
+    # test_rule_prey()
