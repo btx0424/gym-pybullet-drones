@@ -274,7 +274,7 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                     control_timestep=self.AGGR_PHY_STEPS*self.TIMESTEP, 
                     state=self._getDroneStateVector(k),
                     target_pos=self.pos[k],
-                    target_vel= vel_d * (min(speed, 1)+1) * self.SPEED_LIMIT * 2,
+                    target_vel= vel_d * abs(speed) * self.SPEED_LIMIT * 2,
                     target_rpy=rpy * MAX_RPY
                 )[0]
             else:

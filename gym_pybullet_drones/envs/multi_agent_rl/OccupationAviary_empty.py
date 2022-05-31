@@ -13,20 +13,20 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.patches import Rectangle, Circle
 import pdb
 
-class OccupationAviary(BaseMultiagentAviary):
+class OccupationAviary_empty(BaseMultiagentAviary):
     def __init__(self,
         num_predators: int=3,
         fov: float=np.pi/2,
         vision_range: float=np.inf,
         *,
-        map_config = "square",
+        map_config = "empty",
         drone_model: DroneModel=DroneModel.CF2X,
         freq: int=120,
         aggregate_phy_steps: int=1,
         gui=False,
         obs: ObservationType=ObservationType.KIN,
         episode_len_sec: int=5,
-        observe_obstacles: bool=True,
+        observe_obstacles: bool=False,
         seed = 1,
         fixed_height = False,
         random_agent = False
@@ -66,29 +66,10 @@ class OccupationAviary(BaseMultiagentAviary):
         min_xyz = np.array(self.map_config["map"]["min_xyz"])
         max_xyz = np.array(self.map_config["map"]["max_xyz"])
 
-        if "box" not in self.map_config["obstacles"].keys():
-            self.map_config["obstacles"]["box"] = []
-        self.map_config["obstacles"]["box"] += [
-            [min_xyz[0]-0.1, 0, 1, 0.1, max_xyz[1], 1],
-            [0, max_xyz[1]+0.1, 1, max_xyz[0], 0.1, 1],
-            [max_xyz[0]+0.1, 0, 1, 0.1, max_xyz[1], 1],
-            [0, min_xyz[1]-0.1, 1, max_xyz[0], 0.1, 1]
-        ]
-
         cell_size = 0.4
         grid_shape = ((max_xyz - min_xyz) / cell_size).astype(int)
         centers = np.array(list(np.ndindex(*(grid_shape)))) + 0.5
         avail = np.ones(len(centers), dtype=bool)
-
-        for obstacle_type, obstacle_list in self.map_config['obstacles'].items():
-            if obstacle_type == 'box':
-                box_centers, half_extents = np.split(np.array(obstacle_list), 2, axis=1)
-                for center, half_extent in zip(box_centers, half_extents):
-                    min_corner = ((center-half_extent-min_xyz) / cell_size).astype(int)
-                    max_corner = np.ceil((center+half_extent-min_xyz) / cell_size).astype(int)
-                    mask = (centers > min_corner).all(1) & (centers < max_corner).all(1)
-                    avail[mask] = False
-                self.obstacles['box'] = (box_centers, half_extents)
 
         self.avail = avail.nonzero()[0]
         self.grid_centers = centers / grid_shape * (max_xyz-min_xyz) + min_xyz
@@ -177,7 +158,7 @@ class OccupationAviary(BaseMultiagentAviary):
             rewards[i] -= min(dists)
             
             # # success reward
-            if min(dists) < self.goal_size * np.max(self.MAX_XYZ):
+            if min(dists) <= self.goal_size * np.max(self.MAX_XYZ):
                 rewards[i] += 10
 
         # collision_penalty
@@ -241,10 +222,10 @@ class OccupationAviary(BaseMultiagentAviary):
             xy = self.pos[:, :2]
             uv = rpy2xyz(self.rpy)[:, :2]
             ax.quiver(*xy[self.predators].T, *uv[self.predators].T, color="r")
-            for center, half_extent in zip(*self.obstacles['box']):
-                xy = (center[:2] - half_extent[:2]) * self.MAX_XYZ[:2]
-                w, h = half_extent[:2] * 2 * self.MAX_XYZ[:2]
-                ax.add_patch(Rectangle(xy, w, h))
+            # for center, half_extent in zip(*self.obstacles['box']):
+            #     xy = (center[:2] - half_extent[:2]) * self.MAX_XYZ[:2]
+            #     w, h = half_extent[:2] * 2 * self.MAX_XYZ[:2]
+            #     ax.add_patch(Rectangle(xy, w, h))
             # goals
             for center, half_extent in zip(self.goals[:,:2],self.goals[:,3]):
                 xy =  center * self.MAX_XYZ[:2]
@@ -341,11 +322,11 @@ if __name__ == "__main__":
     import os.path as osp
     from tqdm import tqdm
     num_drones = 2
-    num_obstacles = 6
+    num_obstacles = 0
     env = OccupationAviary(
         num_predators=num_drones,
         aggregate_phy_steps=4, episode_len_sec=15, 
-        map_config="mini_square",
+        map_config="empty",
         fixed_height=True)
     print(env.predators)
     print(env.obs_split_shapes)
@@ -357,8 +338,8 @@ if __name__ == "__main__":
     # obs, _, _, _ = env.step(action)
     # assert env.observation_space.contains(obs)
 
-    # predator_policy = VelDummyPolicy(env.obs_split_sections)
-    predator_policy = DiscreteActionPolicy(env.obs_split_sections, num_drones)
+    predator_policy = VelDummyPolicy(env.obs_split_sections)
+    # predator_policy = DiscreteActionPolicy(env.obs_split_sections, num_drones)
     # predator_policy = VelZeroPolicy(env.obs_split_sections)
     # predator_policy = WayPointPolicy(
     #     env._clipAndNormalizeXYZ(env.map_config['prey']['waypoints'])[0], 
@@ -374,14 +355,7 @@ if __name__ == "__main__":
     for i in tqdm(range(env.MAX_PHY_STEPS//env.AGGR_PHY_STEPS)):
         action = {}
         # action.update(predator_policy({i: obs[i] for i in env.predators}))
-        # action.update(predator_policy(num_obstacles, num_drones, {i: obs[i] for i in env.predators}))
-        for idx in range(num_drones):
-            if i <= 20:
-                action[idx] = predator_policy.action(np.array([0,0]))[idx]
-            elif i >20 and i<=30:
-                action[idx] = predator_policy.action(np.array([13,13]))[idx]
-            else:
-                action[idx] = predator_policy.action(np.array([1,1]))[idx]
+        action.update(predator_policy(num_obstacles, num_drones, {i: obs[i] for i in env.predators}))
         # print('action', action)
         
         obs, reward, done, info = env.step(action)
