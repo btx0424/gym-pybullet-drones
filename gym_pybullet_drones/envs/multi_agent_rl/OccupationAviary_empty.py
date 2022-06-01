@@ -53,7 +53,7 @@ class OccupationAviary_empty(BaseMultiagentAviary):
 
         # set goals
         self.num_goals = num_agents
-        self.goal_size = 0.05 # relative value
+        self.goal_size = 0.1 # relative value
         self.goals = np.zeros(shape=(self.num_goals, 4)) # relative pos + size
         self.goals[:,3:] = self.goal_size
 
