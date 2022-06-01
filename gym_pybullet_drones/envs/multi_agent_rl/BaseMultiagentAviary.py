@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+from gym_pybullet_drones.utils import xyz2rpy
 import numpy as np
 import pybullet as p
 from gym import spaces
@@ -88,7 +89,7 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
         self.MAX_XYZ = np.array(max_xyz)
         self.MIN_XYZ = np.array(min_xyz)
         #### Create integrated controllers #########################
-        if act in [ActionType.PID, ActionType.VEL, ActionType.ONE_D_PID, ActionType.VEL_RPY]:
+        if act in [ActionType.PID, ActionType.VEL, ActionType.ONE_D_PID, ActionType.VEL_RPY_EULER, ActionType.VEL_RPY_QUAT]:
             os.environ['KMP_DUPLICATE_LIB_OK']='True'
             if drone_model in [DroneModel.CF2X, DroneModel.CF2P]:
                 self.ctrl = [DSLPIDControl(drone_model=DroneModel.CF2X) for i in range(num_drones)]
@@ -112,7 +113,7 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                          dynamics_attributes=dynamics_attributes
                          )
         #### Set a limit on the maximum target speed ###############
-        self.SPEED_LIMIT = 0.03 * self.MAX_SPEED_KMH * (1000/3600)
+        self.SPEED_LIMIT = 0.03 * self.MAX_SPEED_KMH * (1000/3600) * 3
         self.MAX_PHY_STEPS = self.EPISODE_LEN_SEC * self.SIM_FREQ
         self.cameras = [Camera()]
 
@@ -163,8 +164,10 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
             size = 3
         elif self.ACT_TYPE in [ActionType.ONE_D_RPM, ActionType.ONE_D_DYN, ActionType.ONE_D_PID]:
             size = 1
-        elif self.ACT_TYPE == ActionType.VEL_RPY:
+        elif self.ACT_TYPE == ActionType.VEL_RPY_EULER:
             size = 7
+        elif self.ACT_TYPE == ActionType.VEL_RPY_QUAT:
+            size = 9
         else:
             raise NotImplementedError(self.ACT_TYPE)
         dtype = np.float32
@@ -227,11 +230,8 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                                                         )
                 rpm[int(k),:] = rpm_k
             elif self.ACT_TYPE == ActionType.VEL:
-                state = self._getDroneStateVector(int(k))
-                if np.linalg.norm(v[0:3]) != 0:
-                    v_unit_vector = v[0:3] / np.linalg.norm(v[0:3])
-                else:
-                    v_unit_vector = np.zeros(3)
+                state = self._getDroneStateVector(k)
+                v_unit_vector = v[0:3] / (np.linalg.norm(v[0:3])+1e-6)
                 temp, _, _ = self.ctrl[int(k)].computeControl(control_timestep=self.AGGR_PHY_STEPS*self.TIMESTEP, 
                                                         cur_pos=state[0:3],
                                                         cur_quat=state[3:7],
@@ -267,16 +267,19 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                                                         cur_ang_vel=state[13:16],
                                                         target_pos=state[0:3]+0.1*np.array([0,0,v[0]])
                                                         )[0]
-            elif self.ACT_TYPE == ActionType.VEL_RPY:
-                vel_d, speed, rpy = v[:3], v[3], v[4:]
-                vel_d = vel_d / (np.linalg.norm(vel_d)+1e-6)
+            elif self.ACT_TYPE == ActionType.VEL_RPY_EULER:
+                vel_d, speed, ori_d = v[:3], v[3], v[4:]
+                vel_d = vel_d / (np.linalg.norm(vel_d) + 1e-6)
+                ori_d = ori_d / (np.linalg.norm(ori_d) + 1e-6)
                 rpm[k]= self.ctrl[k].computeControlFromState(
                     control_timestep=self.AGGR_PHY_STEPS*self.TIMESTEP, 
                     state=self._getDroneStateVector(k),
                     target_pos=self.pos[k],
-                    target_vel= vel_d * abs(speed) * self.SPEED_LIMIT * 2,
-                    target_rpy=rpy * MAX_RPY
+                    target_vel= vel_d * abs(speed) * self.SPEED_LIMIT,
+                    target_rpy=xyz2rpy(ori_d)
                 )[0]
+            elif self.ACT_TYPE == ActionType.VEL_RPY_QUAT:
+                pass
             else:
                 raise NotImplementedError(self.ACT_TYPE)
         return rpm

@@ -54,7 +54,8 @@ class ActionType(Enum):
     ONE_D_RPM = "one_d_rpm"     # 1D (identical input to all motors) with RPMs
     ONE_D_DYN = "one_d_dyn"     # 1D (identical input to all motors) with desired thrust and torques
     ONE_D_PID = "one_d_pid"     # 1D (identical input to all motors) with PID control
-    VEL_RPY = "vel_rpy"
+    VEL_RPY_EULER = "vel_rpy_euler"
+    VEL_RPY_QUAT = "vel_rpy_quat"
 
 ################################################################################
 

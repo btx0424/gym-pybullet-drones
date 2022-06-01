@@ -13,6 +13,8 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.patches import Rectangle, Circle
 
+from termcolor import colored
+
 def in_sight_test(from_pos, to_pos, ori, fov, to_id, vision_range):
     d = to_pos[:, None] - from_pos # (n_prey, n_predators, 3)
     distance = np.linalg.norm(d, axis=-1, keepdims=True)
@@ -41,6 +43,7 @@ class PredatorPreyAviary(BaseMultiagentAviary):
         aggregate_phy_steps: int=1,
         gui=False,
         obs: ObservationType=ObservationType.KIN,
+        act: ActionType=ActionType.VEL_RPY_EULER,
         episode_len_sec: int=5,
         observe_obstacles: bool=True
         ):
@@ -111,7 +114,7 @@ class PredatorPreyAviary(BaseMultiagentAviary):
                          aggregate_phy_steps=aggregate_phy_steps,
                          gui=gui,
                          obs=obs,
-                         act=ActionType.VEL_RPY,
+                         act=act,
                          episode_len_sec=episode_len_sec,
                          max_xyz=self.map_config["map"]["max_xyz"],
                          min_xyz=self.map_config["map"]["min_xyz"])
@@ -143,6 +146,7 @@ class PredatorPreyAviary(BaseMultiagentAviary):
         self.episode_reward = np.zeros(self.NUM_DRONES)
         self.collision_penalty = np.zeros(self.NUM_DRONES)
         self.alive = np.ones(self.NUM_DRONES, dtype=bool)
+        self.captured_steps = np.zeros(self.num_preys)
         return obs
     
     def _observationSpace(self) -> spaces.Dict:
@@ -198,7 +202,7 @@ class PredatorPreyAviary(BaseMultiagentAviary):
         in_sight = np.ones((self.num_preys, self.num_predators), dtype=bool)
         
         reward = np.zeros(self.NUM_DRONES)
-        min_distance = np.min(distance, axis=-1)
+        min_distance = distance.min(1).flatten() # (num_prey,)
         reward_predators = (2*min_distance-0.2)*np.exp(-min_distance*3)*5
         reward_preys = np.exp(-min_distance)
         reward[self.predators] = np.sum(in_sight.any(1) * reward_predators) / self.num_predators
@@ -210,7 +214,8 @@ class PredatorPreyAviary(BaseMultiagentAviary):
 
         self.episode_reward += reward
         self.collision_penalty += self.drone_collision.astype(np.float32)
-        self.alive[self.collision_penalty > 100] = False
+        self.captured_steps[min_distance < 0.2] += 1
+        self.alive[self.collision_penalty > 100] = False                                                         
         return reward
         # return reward * self.alive
 
@@ -292,6 +297,7 @@ class PredatorAviary(PredatorPreyAviary):
             *, 
             map_config = None,
             drone_model: DroneModel = DroneModel.CF2X, 
+            act: ActionType = ActionType.VEL_RPY_EULER,
             freq: int = 120, 
             aggregate_phy_steps: int = 1, 
             gui=False, 
@@ -303,7 +309,7 @@ class PredatorAviary(PredatorPreyAviary):
             drone_model=drone_model, freq=freq, 
             aggregate_phy_steps=aggregate_phy_steps, 
             gui=gui, episode_len_sec=episode_len_sec, 
-            observe_obstacles=observe_obstacles)
+            observe_obstacles=observe_obstacles, act=act)
         
         self.num_agents = len(self.predators)
         self.waypoints = np.array(self.map_config['prey']['waypoints'])
@@ -358,7 +364,7 @@ class PredatorAviary(PredatorPreyAviary):
 
 def test(func):
     def foo(*args, **kwargs):
-        print("Testing:", func.__name__)
+        print(colored("Testing:", "red"), func.__name__, kwargs)
         func(*args, **kwargs)
     return foo
 
@@ -426,14 +432,15 @@ def test_env():
     print(reward_total, done)
 
 @test
-def test_predator_aviary(prey_policy="fixed"):
+def test_predator_aviary(prey_policy="fixed", act=ActionType.VEL_RPY_EULER):
     env = PredatorAviary(
         num_predators=2, num_preys=1,
         aggregate_phy_steps=4, episode_len_sec=20, 
-        map_config="arena", prey_policy=prey_policy)
+        map_config="arena", prey_policy=prey_policy, act=act)
     print("obs_split_shapes", env.obs_split_shapes)
     print("obs_split_sections:", env.obs_split_sections)
-    predator_policy = VelDummyPolicy(env.obs_split_sections)
+    print("action_space:", env.action_space)
+    predator_policy = VelDummyPolicy(env.obs_split_sections, speed=0.9, act_type=env.ACT_TYPE)
     
     obs = env.reset()
     frames = []
@@ -449,11 +456,10 @@ def test_predator_aviary(prey_policy="fixed"):
         if i % 4 == 0: frames.append(env.render("mini_map"))
     
     imageio.mimsave(
-        osp.join(osp.dirname(osp.abspath(__file__)), f"test_{env.__class__.__name__}_{reward_total}.gif"),
+        osp.join(osp.dirname(osp.abspath(__file__)), f"test_{env.__class__.__name__}_{reward_total:.0f}.gif"),
         ims=frames,
         format="GIF"
     )
-    print(env.pos)
     print(reward_total, done)
 
 if __name__ == "__main__":
@@ -463,12 +469,14 @@ if __name__ == "__main__":
 
     # test_in_sight()
     # test_env()
-    test_predator_aviary("fixed")
-    test_predator_aviary("rule")
+    test_predator_aviary(prey_policy="fixed", act=ActionType.VEL)
+    test_predator_aviary(prey_policy="fixed", act=ActionType.VEL_RPY_EULER)
+    # test_predator_aviary("rule")
 
     # env = PredatorAviary(num_predators=1, num_preys=1,
     #     aggregate_phy_steps=4, episode_len_sec=20, 
     #     map_config="arena")
+    # print(env.SPEED_LIMIT)
     # print(env.INIT_RPYS[0])
     # action = np.zeros(7)
     # action[:3] = np.array([1, 1, 1])
