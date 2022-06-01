@@ -274,7 +274,7 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                     control_timestep=self.AGGR_PHY_STEPS*self.TIMESTEP, 
                     state=self._getDroneStateVector(k),
                     target_pos=self.pos[k],
-                    target_vel= vel_d * abs(speed) * self.SPEED_LIMIT * 3,
+                    target_vel= vel_d * abs(speed) * self.SPEED_LIMIT * 2,
                     target_rpy=rpy * MAX_RPY
                 )[0]
             else:
@@ -359,7 +359,7 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
         normalized_rp = clipped_rp / MAX_PITCH_ROLL
         normalized_y = state[9] / np.pi # No reason to clip
         normalized_vel_xy = clipped_vel_xy / MAX_LIN_VEL_XY
-        normalized_vel_z = clipped_vel_z / MAX_LIN_VEL_XY
+        normalized_vel_z = clipped_vel_z / MAX_LIN_VEL_Z
         normalized_ang_vel = state[13:16]/np.linalg.norm(state[13:16]) if np.linalg.norm(state[13:16]) != 0 else state[13:16]
 
         norm_and_clipped = np.hstack([normalized_pos_xyz,
