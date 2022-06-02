@@ -3,7 +3,7 @@ import numpy as np
 MAX_RPY = np.array([np.pi, np.pi/2, np.pi])
 
 def xyz2rpy(xyz: np.ndarray, normalize=False) -> np.ndarray:
-    xyz = xyz / (np.linalg.norm(xyz, axis=-1, keepdims=True)+1e-5) # xyz is of shape (*, 3)
+    xyz = xyz / (np.linalg.norm(xyz, axis=-1, keepdims=True)+1e-6) # xyz is of shape (*, 3)
     x, y, z = xyz.T
     rpy = np.stack([
         np.zeros_like(x), 

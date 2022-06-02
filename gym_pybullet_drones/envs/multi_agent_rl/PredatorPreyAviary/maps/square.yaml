@@ -1,6 +1,7 @@
 map:
   min_xyz: [-3, -3, 0]
   max_xyz: [3, 3, 2]
+  wall: True
 obstacles:
   box: 
     - [-1.5, 1.5, 1, 0.2, 0.2, 1]

@@ -1,0 +1,13 @@
+map:
+  min_xyz: [-3, -3, 0]
+  max_xyz: [3, 3, 2]
+  wall: False
+obstacles:
+  cylinder:
+    - [0, 0, 1, 0.4]
+prey:
+  waypoints:
+    - [-2, -2, 0.3]
+    - [2, -2, 0.4]
+    - [2, 2, 0.2]
+    - [-2, 2, 0.3]
