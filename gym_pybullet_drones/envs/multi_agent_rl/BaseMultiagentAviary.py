@@ -269,20 +269,20 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                                                         )[0]
             elif self.ACT_TYPE == ActionType.VEL_RPY_EULER:
                 # vector
-                # vel_d, speed, ori_d = v[:3], v[3], v[4:]
-                # vel_d = vel_d / (np.linalg.norm(vel_d) + 1e-6)
-                # ori_d = ori_d / (np.linalg.norm(ori_d) + 1e-6)
-                # ori_rpy = xyz2rpy(ori_d)
+                vel_d, speed, ori_d = v[:3], v[3], v[4:]
+                vel_d = vel_d / (np.linalg.norm(vel_d) + 1e-6)
+                ori_d = ori_d / (np.linalg.norm(ori_d) + 1e-6)
+                ori_rpy = xyz2rpy(ori_d)
                 # euler angles
-                vel_rpy, speed, ori_rpy = v[:3], v[3], v[4:]
-                vel_d = rpy2xyz(vel_rpy * MAX_RPY)
+                # vel_rpy, speed, ori_rpy = v[:3], v[3], v[4:] * MAX_RPY
+                # vel_d = rpy2xyz(vel_rpy * MAX_RPY)
 
                 rpm[k]= self.ctrl[k].computeControlFromState(
                     control_timestep=self.AGGR_PHY_STEPS*self.TIMESTEP, 
                     state=self._getDroneStateVector(k),
                     target_pos=self.pos[k],
                     target_vel= vel_d * abs(speed) * self.SPEED_LIMIT,
-                    target_rpy=ori_rpy * MAX_RPY,
+                    target_rpy=ori_rpy,
                 )[0]
             elif self.ACT_TYPE == ActionType.VEL_RPY_QUAT:
                 pass

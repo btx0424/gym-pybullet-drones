@@ -471,8 +471,8 @@ if __name__ == "__main__":
 
     # test_in_sight()
     # test_env()
-    test_predator_aviary(prey_policy="fixed", act=ActionType.VEL)
-    # test_predator_aviary(prey_policy="fixed", act=ActionType.VEL_RPY_EULER)
+    # test_predator_aviary(prey_policy="fixed", act=ActionType.VEL)
+    test_predator_aviary(prey_policy="fixed", act=ActionType.VEL_RPY_EULER)
     # test_predator_aviary("rule")
 
     # env = PredatorAviary(num_predators=1, num_preys=1,
