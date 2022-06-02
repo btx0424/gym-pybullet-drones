@@ -19,31 +19,39 @@ class WayPointPolicy:
     def __call__(self, states: Dict[int, np.ndarray]) -> Dict[int, np.ndarray]:
         indices = states.keys()
         states = np.stack(list(states.values()))
+
+        state_self = np.split(states, self.obs_split_sections[:-1], axis=-1)[-1]
+        pos_self = state_self[:, :3]
+        pos_target = self.waypoints[self.waypoint_cnt]
+        direction_vector = pos_target - pos_self
+        
         if self.act_type == ActionType.VEL:
             actions = np.zeros((len(states), 4))
-            state_self = np.split(states, self.obs_split_sections[:-1], axis=-1)[-1]
-            pos_self = state_self[:, :3]
-            target_vel = self.waypoints[self.waypoint_cnt] - pos_self
-            # target_vel /= target_vel.max(-1)
-            actions[:, :3] = target_vel
+            actions[:, :3] = direction_vector
             actions[:, 3] = self.speed
         elif self.act_type == ActionType.VEL_RPY_EULER:
             actions = np.zeros((len(states), 7))
-            state_self = np.split(states, self.obs_split_sections[:-1], axis=-1)[-1]
-            pos_self = state_self[:, :3]
-            target_vel = self.waypoints[self.waypoint_cnt] - pos_self
-            # target_vel /= target_vel.max(-1)
-            target_rpy_d = target_vel.copy()
-            target_rpy_d[:, 2] = 0 
-            actions[:, :3] = target_vel
             actions[:, 3] = self.speed
-            actions[:, 4:] = target_rpy_d
+            ## vector
+            # target_vel = pos_target - pos_self
+            # target_ori = target_vel.copy()
+            # target_ori[:, 2] = 0 # set z to 0 
+            # actions[:, :3] = target_vel
+            # actions[:, 4:] = target_ori
+            ## euler angles
+            target_vel_rpy = xyz2rpy(direction_vector, True)
+            target_rpy = target_vel_rpy.copy()
+            target_rpy[:, 1] = 0 # set pitch to 0
+            actions[:, :3] = target_vel_rpy
+            actions[:, 4:] = target_rpy
+            
         elif self.act_type == ActionType.VEL_RPY_QUAT:
             raise NotImplementedError
         else:
             raise NotImplementedError
-        distance = np.linalg.norm(target_vel, axis=-1)
-        if np.any(distance < 0.05): self.waypoint_cnt = (self.waypoint_cnt + 1) % len(self.waypoints)
+        distance = np.linalg.norm(direction_vector, axis=-1)
+        if np.any(distance < 0.05): 
+            self.waypoint_cnt = (self.waypoint_cnt + 1) % len(self.waypoints)
         
         return {idx: actions[i] for i, idx in enumerate(indices)}   
 
@@ -56,25 +64,31 @@ class VelDummyPolicy:
     def __call__(self, states: Dict[int, np.ndarray]) -> Dict[int, np.ndarray]:
         indices = states.keys()
         states = np.stack(list(states.values()))
+
+        state_prey, state_self = np.split(states, self.obs_split_sections[:-1], axis=-1)[-2:]
+        pos_prey, pos_self = state_prey[:, :3], state_self[:, :3]
+        direction_vector = pos_prey - pos_self
+
         if self.act_type == ActionType.VEL:
             actions = np.zeros((len(states), 4))
-            state_prey, state_self = np.split(states, self.obs_split_sections[:-1], axis=-1)[-2:]
-            pos_prey, pos_self = state_prey[:, :3], state_self[:, :3]
-            target_vel = pos_prey - pos_self
-            # target_vel /= target_vel.max(-1)
-            actions[:, :3] = target_vel
+            actions[:, :3] = direction_vector
             actions[:, 3] = self.speed
         elif self.act_type == ActionType.VEL_RPY_EULER:
             actions = np.zeros((len(states), 7))
-            state_prey, state_self = np.split(states, self.obs_split_sections[:-1], axis=-1)[-2:]
-            pos_prey, pos_self = state_prey[:, :3], state_self[:, :3]
-            target_vel = pos_prey - pos_self
-            # target_vel /= target_vel.max(-1, keepdims=True)
-            target_rpy_d = target_vel.copy()
-            target_rpy_d[:, 2] = 0 
-            actions[:, :3] = target_vel
             actions[:, 3] = self.speed
-            actions[:, 4:] = target_rpy_d
+
+            ## vector
+            # target_vel = direction_vector
+            # target_ori = target_vel.copy()
+            # target_ori[:, 2] = 0 # set z to 0 
+            # actions[:, :3] = target_vel
+            # actions[:, 4:] = target_ori
+            ## euler angles
+            target_vel_rpy = xyz2rpy(direction_vector, True)
+            target_rpy = target_vel_rpy.copy()
+            target_rpy[:, 1] = 0 # set pitch to 0
+            actions[:, :3] = target_vel_rpy
+            actions[:, 4:] = target_rpy
         elif self.act_type == ActionType.VEL_RPY_QUAT:
             raise NotImplementedError
         else:
@@ -88,7 +102,7 @@ class RulePreyPolicy:
             prey_indexes, 
             obs_split_sections,
             speed=1, mix=0.6, act_type=ActionType.VEL_RPY_EULER):
-        
+        raise NotImplementedError
         self.predator_indexes = np.array(predator_indexes) - len(prey_indexes) - len(predator_indexes) - 1
         self.prey_indexes = np.array(prey_indexes) - len(prey_indexes) - 1
         self.obs_split_sections = obs_split_sections

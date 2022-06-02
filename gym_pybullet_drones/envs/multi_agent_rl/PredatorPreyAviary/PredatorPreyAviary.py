@@ -203,7 +203,7 @@ class PredatorPreyAviary(BaseMultiagentAviary):
         
         reward = np.zeros(self.NUM_DRONES)
         min_distance = distance.min(1).flatten() # (num_prey,)
-        reward_predators = (2*min_distance-0.2)*np.exp(-min_distance*3)*5
+        reward_predators = 1 / (1 + min_distance)**2
         reward_preys = np.exp(-min_distance)
         reward[self.predators] = np.sum(in_sight.any(1) * reward_predators) / self.num_predators
         reward[self.preys] = -np.sum(in_sight.any(1) * reward_preys) / self.num_preys
@@ -423,6 +423,7 @@ def test_env():
         if np.all(done): break
         if i % 4 == 0: frames.append(env.render("mini_map"))
     
+    env.close()
     imageio.mimsave(
         osp.join(osp.dirname(osp.abspath(__file__)), f"test_{env.__class__.__name__}_{reward_total}.gif"),
         ims=frames,
@@ -455,6 +456,7 @@ def test_predator_aviary(prey_policy="fixed", act=ActionType.VEL_RPY_EULER):
         if np.all(done): break
         if i % 4 == 0: frames.append(env.render("mini_map"))
     
+    env.close()
     imageio.mimsave(
         osp.join(osp.dirname(osp.abspath(__file__)), f"test_{env.__class__.__name__}_{reward_total:.0f}.gif"),
         ims=frames,
@@ -470,7 +472,7 @@ if __name__ == "__main__":
     # test_in_sight()
     # test_env()
     test_predator_aviary(prey_policy="fixed", act=ActionType.VEL)
-    test_predator_aviary(prey_policy="fixed", act=ActionType.VEL_RPY_EULER)
+    # test_predator_aviary(prey_policy="fixed", act=ActionType.VEL_RPY_EULER)
     # test_predator_aviary("rule")
 
     # env = PredatorAviary(num_predators=1, num_preys=1,
