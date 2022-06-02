@@ -199,14 +199,16 @@ class PredatorPreyAviary(BaseMultiagentAviary):
         # hit = (hit_id.T == np.array(self.preys)).T
 
         # in_sight = hit & in_fov & (distance.squeeze() < self.vision_range) # (prey, predators)
-        in_sight = np.ones((self.num_preys, self.num_predators), dtype=bool)
+        # in_sight = np.ones((self.num_preys, self.num_predators), dtype=bool)
         
         reward = np.zeros(self.NUM_DRONES)
         min_distance = distance.min(1).flatten() # (num_prey,)
         reward_predators = 1 / (1 + min_distance)**2
-        reward_preys = np.exp(-min_distance)
-        reward[self.predators] = np.sum(in_sight.any(1) * reward_predators) / self.num_predators
-        reward[self.preys] = -np.sum(in_sight.any(1) * reward_preys) / self.num_preys
+        captured = (0.2 < min_distance) & (min_distance < 0.4) # bonus
+        reward_predators +=  captured.astype(np.float32)
+        reward_preys = - reward_predators
+        reward[self.predators] = np.sum(reward_predators) / self.num_predators
+        reward[self.preys] = -np.sum(reward_preys) / self.num_preys
         
         # collision_penalty
         self.drone_collision = np.array([len(p.getContactPoints(bodyA=drone_id))>0 for drone_id in self.DRONE_IDS])
@@ -214,7 +216,7 @@ class PredatorPreyAviary(BaseMultiagentAviary):
 
         self.episode_reward += reward
         self.collision_penalty += self.drone_collision.astype(np.float32)
-        self.captured_steps[min_distance < 0.2] += 1
+        self.captured_steps[captured] += 1
         self.alive[self.collision_penalty > 100] = False                                                         
         return reward
         # return reward * self.alive
@@ -471,7 +473,7 @@ if __name__ == "__main__":
 
     # test_in_sight()
     # test_env()
-    # test_predator_aviary(prey_policy="fixed", act=ActionType.VEL)
+    test_predator_aviary(prey_policy="fixed", act=ActionType.VEL)
     test_predator_aviary(prey_policy="fixed", act=ActionType.VEL_RPY_EULER)
     # test_predator_aviary("rule")
 

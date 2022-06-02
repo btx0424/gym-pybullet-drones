@@ -33,17 +33,12 @@ class WayPointPolicy:
             actions = np.zeros((len(states), 7))
             actions[:, 3] = self.speed
             ## vector
-            target_vel = pos_target - pos_self
-            target_ori = target_vel.copy()
-            # target_ori[:, 2] = 0 # set z to 0 
-            actions[:, :3] = target_vel
-            actions[:, 4:] = target_ori
+            actions[:, :3] = direction_vector
+            actions[:, 4:6] = direction_vector[:, :2] # leave z as 0
             ## euler angles
             # target_vel_rpy = xyz2rpy(direction_vector, True)
-            # target_rpy = target_vel_rpy.copy()
-            # target_rpy[:, 1] = 0 # set pitch to 0
             # actions[:, :3] = target_vel_rpy
-            # actions[:, 4:] = target_rpy
+            # actions[:, -1] = target_vel_rpy[-1] # take only yaw
             
         elif self.act_type == ActionType.VEL_RPY_QUAT:
             raise NotImplementedError
@@ -78,17 +73,13 @@ class VelDummyPolicy:
             actions[:, 3] = self.speed
 
             ## vector
-            target_vel = direction_vector
-            target_ori = target_vel.copy()
-            target_ori[:, 2] = 0 # set z to 0 
-            actions[:, :3] = target_vel
-            actions[:, 4:] = target_ori
+            actions[:, :3] = direction_vector
+            actions[:, 4:6] = direction_vector[:, :2] # leave z to 0
+
             ## euler angles
             # target_vel_rpy = xyz2rpy(direction_vector, True)
-            # target_rpy = target_vel_rpy.copy()
-            # target_rpy[:, 1] = 0 # set pitch to 0
             # actions[:, :3] = target_vel_rpy
-            # actions[:, 4:] = target_rpy
+            # actions[:, -1] = target_vel_rpy[-1] # take only yaw
         elif self.act_type == ActionType.VEL_RPY_QUAT:
             raise NotImplementedError
         else:
