@@ -158,20 +158,24 @@ class OccupationAviary_empty(BaseMultiagentAviary):
         goals_pos = self.goals[:,0:3] * self.MAX_XYZ # np.max(self.MAX_XYZ)
         rewards = np.zeros(self.NUM_DRONES)
         success = 0
-        exe_time = 0
+        success_reward = 0
+        distance_reward = 0
         for i in range(self.num_goals):
             dists = [np.linalg.norm(drone_pos[j] - goals_pos[i]) for j in range(self.NUM_DRONES)]
-            rewards[i] -= min(dists)
+            distance_reward -= min(dists)
             
             # success reward
             if min(dists) <= self.goal_size * np.max(self.MAX_XYZ):
-                rewards[i] += 10
+                success_reward += 10
                 success += 1
+        # share_reward
+        rewards += success_reward
+        rewards += distance_reward
         
         self.success = success / self.num_goals
 
         if success == self.num_goals:
-            self.exe_time = self.timestep
+            self.exe_time = min(self.timestep, self.exe_time)
         else:
             self.exe_time = self.global_max_steps
 
@@ -180,7 +184,7 @@ class OccupationAviary_empty(BaseMultiagentAviary):
 
         # collision_penalty
         self.drone_collision = np.array([len(p.getContactPoints(bodyA=drone_id))>0 for drone_id in self.DRONE_IDS])
-        rewards -= self.drone_collision.astype(np.float32)
+        rewards -= self.drone_collision.astype(np.float32) * 5
         
         self.episode_reward += rewards
         self.collision_penalty += self.drone_collision.astype(np.float32) * 5
@@ -225,6 +229,7 @@ class OccupationAviary_empty(BaseMultiagentAviary):
                 basePosition=center*self.MAX_XYZ)
 
     def step(self, action):
+        print('action', action)
         obs, reward, done, info = super().step(action)
         self.episode_reward += reward
         self.timestep = (self.timestep + 1) % self.global_max_steps
