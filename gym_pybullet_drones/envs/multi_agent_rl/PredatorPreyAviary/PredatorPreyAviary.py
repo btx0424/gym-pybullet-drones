@@ -13,7 +13,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.patches import Rectangle, Circle
 
-from termcolor import colored
+# from termcolor import colored
 
 def in_sight_test(from_pos, to_pos, ori, fov, to_id, vision_range):
     d = to_pos[:, None] - from_pos # (n_prey, n_predators, 3)
