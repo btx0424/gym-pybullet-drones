@@ -3,7 +3,7 @@ from gym_pybullet_drones.envs.BaseAviary import ActionType
 import numpy as np
 from typing import List, Tuple, Dict
 from gym_pybullet_drones.utils import xyz2rpy, rpy2xyz
-
+import pybullet as p
 
 class WayPointPolicy:
     def __init__(self, waypoints, obs_split_sections, act_type=ActionType.VEL_RPY_EULER, speed=1.) -> None:
@@ -32,22 +32,25 @@ class WayPointPolicy:
         elif self.act_type == ActionType.VEL_RPY_EULER:
             actions = np.zeros((len(states), 7))
             actions[:, 3] = self.speed
+
             ## vector
             actions[:, :3] = direction_vector
             actions[:, 4:6] = direction_vector[:, :2] # leave z as 0
+
             ## euler angles
             # target_vel_rpy = xyz2rpy(direction_vector, True)
             # actions[:, :3] = target_vel_rpy
             # actions[:, -1] = target_vel_rpy[-1] # take only yaw
-            
         elif self.act_type == ActionType.VEL_RPY_QUAT:
-            raise NotImplementedError
+            actions = np.zeros((len(states), 9))
+            actions[:, 4] = self.speed
+            actions[:, :4] = np.stack([p.getQuaternionFromEuler(rpy) for rpy in xyz2rpy(direction_vector)])
+            actions[:, 5:] = np.stack([p.getQuaternionFromEuler(rpy) for rpy in xyz2rpy(direction_vector)])
         else:
             raise NotImplementedError
         distance = np.linalg.norm(direction_vector, axis=-1)
         if np.any(distance < 0.05): 
             self.waypoint_cnt = (self.waypoint_cnt + 1) % len(self.waypoints)
-        
         return {idx: actions[i] for i, idx in enumerate(indices)}   
 
 class VelDummyPolicy:
@@ -81,7 +84,10 @@ class VelDummyPolicy:
             # actions[:, :3] = target_vel_rpy
             # actions[:, -1] = target_vel_rpy[-1] # take only yaw
         elif self.act_type == ActionType.VEL_RPY_QUAT:
-            raise NotImplementedError
+            actions = np.zeros((len(states), 9))
+            actions[:, 4] = self.speed
+            actions[:, :4] = np.stack([p.getQuaternionFromEuler(rpy) for rpy in xyz2rpy(direction_vector)])
+            actions[:, 5:] = np.stack([p.getQuaternionFromEuler(rpy) for rpy in xyz2rpy(direction_vector)])
         else:
             raise NotImplementedError
         return {idx: actions[i] for i, idx in enumerate(indices)}   

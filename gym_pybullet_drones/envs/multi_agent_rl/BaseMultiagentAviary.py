@@ -285,7 +285,16 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                     target_rpy=ori_rpy,
                 )[0]
             elif self.ACT_TYPE == ActionType.VEL_RPY_QUAT:
-                pass
+                vel_quat, speed, ori_quat = v[:4], v[4], v[5:]
+                vel_d = rpy2xyz(np.stack([p.getEulerFromQuaternion(vel_quat)]))
+                ori_rpy = p.getEulerFromQuaternion(ori_quat)
+                rpm[k]= self.ctrl[k].computeControlFromState(
+                    control_timestep=self.AGGR_PHY_STEPS*self.TIMESTEP,
+                    state=self._getDroneStateVector(k),
+                    target_pos=self.pos[k],
+                    target_vel= vel_d * abs(speed) * self.SPEED_LIMIT,
+                    target_rpy=ori_rpy,
+                )[0]
             else:
                 raise NotImplementedError(self.ACT_TYPE)
         return rpm

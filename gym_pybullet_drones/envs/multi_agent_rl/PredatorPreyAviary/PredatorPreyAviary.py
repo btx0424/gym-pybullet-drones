@@ -204,8 +204,8 @@ class PredatorPreyAviary(BaseMultiagentAviary):
         reward = np.zeros(self.NUM_DRONES)
         min_distance = distance.min(1).flatten() # (num_prey,)
         reward_predators = 1 / (1 + min_distance)**2
-        captured = (0.2 < min_distance) & (min_distance < 0.4) # bonus
-        reward_predators +=  captured.astype(np.float32)
+        captured = (0.2 < min_distance) & (min_distance < 0.4) 
+        # reward_predators +=  captured.astype(np.float32) # bonus for capturing
         reward_preys = - reward_predators
         reward[self.predators] = np.sum(reward_predators) / self.num_predators
         reward[self.preys] = -np.sum(reward_preys) / self.num_preys
@@ -317,8 +317,9 @@ class PredatorAviary(PredatorPreyAviary):
         self.waypoints = np.array(self.map_config['prey']['waypoints'])
         if prey_policy == "fixed":
             self.prey_policy = WayPointPolicy(
-                self._clipAndNormalizeXYZ(self.waypoints)[0],
-                self.obs_split_sections
+                waypoints=self._clipAndNormalizeXYZ(self.waypoints)[0],
+                obs_split_sections=self.obs_split_sections,
+                act_type=self.ACT_TYPE,
             )
         elif prey_policy == "rule":
             self.prey_policy = RulePreyPolicy(
@@ -444,7 +445,7 @@ def test_predator_aviary(prey_policy="fixed", act=ActionType.VEL_RPY_EULER):
     print("obs_split_sections:", env.obs_split_sections)
     print("action_space:", env.action_space)
     predator_policy = VelDummyPolicy(env.obs_split_sections, speed=0.9, act_type=env.ACT_TYPE)
-    
+
     obs = env.reset()
     frames = []
     reward_total = 0
@@ -473,8 +474,9 @@ if __name__ == "__main__":
 
     # test_in_sight()
     # test_env()
-    test_predator_aviary(prey_policy="fixed", act=ActionType.VEL)
-    test_predator_aviary(prey_policy="fixed", act=ActionType.VEL_RPY_EULER)
+    # test_predator_aviary(prey_policy="fixed", act=ActionType.VEL)
+    # test_predator_aviary(prey_policy="fixed", act=ActionType.VEL_RPY_EULER)
+    test_predator_aviary(prey_policy="fixed", act=ActionType.VEL_RPY_QUAT)
     # test_predator_aviary("rule")
 
     # env = PredatorAviary(num_predators=1, num_preys=1,
