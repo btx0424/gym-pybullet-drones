@@ -365,6 +365,71 @@ class PredatorAviary(PredatorPreyAviary):
         info = super()._computeInfo()
         return info[self.predators]
 
+class DiscreteActionWrapper(gym.ActionWrapper):
+    def __init__(self, env, mix=1., speed=0.75) -> None:
+        super().__init__(env)
+        self.action_space = [spaces.Discrete(27)] * self.num_agents
+        self.directions = np.array(list(np.ndindex(3, 3, 3))) - 1
+        self.mix = mix
+        self.speed = speed
+
+    def reset(self, *args, **kwargs):
+        if self.ACT_TYPE == ActionType.VEL:
+            self._last_action = np.zeros((self.num_agents, 4))
+        elif self.ACT_TYPE == ActionType.VEL_RPY_EULER:
+            self._last_action = np.zeros((self.num_agents, 7))
+        return super().reset(*args, **kwargs)
+
+    def action(self, action: Dict):
+        action = np.array(list(action.values())).flatten()
+        if self.ACT_TYPE == ActionType.VEL:
+            vel_action = np.zeros((len(action), 4))
+        elif self.ACT_TYPE == ActionType.VEL_RPY_EULER: 
+            vel_action = np.zeros((self.num_agents, 7))
+            vel_action[:, 4:6] = self.directions[action][:, :2] # leave z as 0
+        vel_action[:, 3] = self.speed
+        vel_action[:, :3] = self.directions[action]
+        
+        self._last_action = vel_action = vel_action * self.mix + self._last_action * (1 - self.mix)
+        return {i: vel_action[i] for i in range(self.num_agents)}
+
+class MultiDiscreteWrapper(gym.ActionWrapper):
+    def __init__(self, env, max_speed=1., speed_split_num=5, mix=1.) -> None:
+        super().__init__(env)
+        self.directions = np.array(list(np.ndindex(3, 3, 3))) - 1
+        self.max_speed = max_speed
+        self.speed_split_num = speed_split_num
+        self.mix = mix
+        self.action_space = [spaces.MultiDiscrete([27, self.speed_split_num])] * self.num_agents
+
+    def reset(self, *args, **kwargs):
+        if self.ACT_TYPE == ActionType.VEL:
+            self._last_action = np.zeros((self.num_agents, 4))
+        elif self.ACT_TYPE == ActionType.VEL_RPY_EULER:
+            self._last_action = np.zeros((self.num_agents, 7))
+        return super().reset(*args, **kwargs)
+
+    def action(self, action):
+        action = np.stack(list(action.values())) # (num_agents, 2)
+        action_dir = action[:, 0]
+        action_vel = action[:, 1]
+        if self.ACT_TYPE == ActionType.VEL:
+            vel_action = np.zeros((len(action), 4))
+        if self.ACT_TYPE == ActionType.VEL_RPY_EULER:
+            vel_action = np.zeros((self.num_agents, 7))
+            vel_action[:, 4:6] = self.directions[action_dir][:, :2] # leave z as 0
+            # vel_action[:, -1] = xyz2rpy(self.directions[action_dir], True)[-1] # only take yaw
+
+        quantized_speed = np.linspace(0, self.max_speed, self.speed_split_num)
+        vel_action[:, 3] = quantized_speed[action_vel]
+
+        ## vector repr.of direction
+        vel_action[:, :3] = self.directions[action_dir]
+        ## euler angles repr.of direction
+        # vel_action[:, :3] = xyz2rpy(self.directions[action_dir], True)
+        self._last_action = vel_action = vel_action * self.mix + self._last_action * (1-self.mix)
+        return {i: vel_action[i] for i in range(self.num_agents)}
+    
 def test(func):
     def foo(*args, **kwargs):
         print(colored("Testing:", "red"), func.__name__, kwargs)
@@ -436,7 +501,8 @@ def test_env():
     print(reward_total, done)
 
 @test
-def test_predator_aviary(prey_policy="fixed", act=ActionType.VEL_RPY_EULER):
+def test_predator_aviary(
+        prey_policy="fixed", act=ActionType.VEL_RPY_EULER):
     env = PredatorAviary(
         num_predators=2, num_preys=1,
         aggregate_phy_steps=4, episode_len_sec=20, 
@@ -444,8 +510,44 @@ def test_predator_aviary(prey_policy="fixed", act=ActionType.VEL_RPY_EULER):
     print("obs_split_shapes", env.obs_split_shapes)
     print("obs_split_sections:", env.obs_split_sections)
     print("action_space:", env.action_space)
+    
     predator_policy = VelDummyPolicy(env.obs_split_sections, speed=0.9, act_type=env.ACT_TYPE)
 
+    obs = env.reset()
+    frames = []
+    reward_total = 0
+    
+    for i in tqdm(range(env.MAX_PHY_STEPS//env.AGGR_PHY_STEPS)):
+        action = {}
+        action.update(predator_policy({i: obs[i] for i in env.predators}))
+        
+        obs, reward, done, info = env.step(action)
+        reward_total += sum(reward)
+        if np.all(done): break
+        if i % 4 == 0: frames.append(env.render("mini_map"))
+    
+    env.close()
+    imageio.mimsave(
+        osp.join(osp.dirname(osp.abspath(__file__)), f"test_{env.__class__.__name__}_{reward_total:.0f}.gif"),
+        ims=frames,
+        format="GIF"
+    )
+    print(reward_total, done)
+
+@test
+def test_discrete_action(act=ActionType.VEL_RPY_EULER):
+    env = PredatorAviary(
+        num_predators=2, num_preys=1,
+        aggregate_phy_steps=4, episode_len_sec=20, 
+        map_config="arena", prey_policy="fixed", act=act)
+    env = DiscreteActionWrapper(env, mix=0.1)
+    
+    print("obs_split_shapes", env.obs_split_shapes)
+    print("obs_split_sections:", env.obs_split_sections)
+    print("action_space:", env.action_space)
+
+    predator_policy = PredatorDiscretePolicy(env.obs_split_sections)
+    
     obs = env.reset()
     frames = []
     reward_total = 0
@@ -476,8 +578,10 @@ if __name__ == "__main__":
     # test_env()
     # test_predator_aviary(prey_policy="fixed", act=ActionType.VEL)
     # test_predator_aviary(prey_policy="fixed", act=ActionType.VEL_RPY_EULER)
-    test_predator_aviary(prey_policy="fixed", act=ActionType.VEL_RPY_QUAT)
-    # test_predator_aviary("rule")
+    # test_predator_aviary(prey_policy="fixed", act=ActionType.VEL_RPY_QUAT)
+
+    test_discrete_action(act=ActionType.VEL)
+    test_discrete_action(act=ActionType.VEL_RPY_EULER)
 
     # env = PredatorAviary(num_predators=1, num_preys=1,
     #     aggregate_phy_steps=4, episode_len_sec=20, 

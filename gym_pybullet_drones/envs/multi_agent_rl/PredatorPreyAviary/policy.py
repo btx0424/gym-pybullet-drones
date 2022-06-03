@@ -92,6 +92,22 @@ class VelDummyPolicy:
             raise NotImplementedError
         return {idx: actions[i] for i, idx in enumerate(indices)}   
 
+class PredatorRulePolicy:
+    def __init__(self,
+            map_config,
+            predator_indexes, 
+            prey_indexes, 
+            obs_split_sections,
+            speed=1, mix=0.6, act_type=ActionType.VEL_RPY_EULER):
+
+        self.predator_indexes = np.array(predator_indexes) - len(prey_indexes) - len(predator_indexes) - 1
+        self.prey_indexes = np.array(prey_indexes) - len(prey_indexes) - 1
+        self.obs_split_sections = obs_split_sections
+        self.speed = speed
+        self.mix = mix
+        self.act_type = act_type
+        
+
 class RulePreyPolicy:
     def __init__(self, 
             map_config,
@@ -131,100 +147,23 @@ class RulePreyPolicy:
             self._last_actions[prey] = target_vel
         return actions
 
-class RulePredatorPolicy:
-    """
-    A policy that uses A* search to find a shortest path from each predator to a prey.
-    """
-    def __init__(self,
-            map_config,
-            predator_indexes, 
-            prey_indexes, 
-            obs_split_sections):
-        raise NotImplementedError("Not correctly implemented yet.")
-        self.map_config = map_config
-        self.predator_indexes = predator_indexes
-        self.prey_indexes = prey_indexes,
+class PredatorDiscretePolicy:
+    def __init__(self, obs_split_sections):
         self.obs_split_sections = obs_split_sections
-
-        adj = np.stack(np.meshgrid([-1, 0, 1], [-1, 0, 1], [-1, 0, 1]), axis=-1).reshape(-1, 3)
-        self.adj = adj[~(adj == 0).all(1)]
-
-        min_xyz = np.array(map_config["map"]["min_xyz"])
-        max_xyz = np.array(map_config["map"]["max_xyz"])
-        num_cells = 20
-        cell_size = (max_xyz - min_xyz) / num_cells
-        xx, yy, zz = (np.linspace(min_xyz, max_xyz, num_cells+1)[:-1] + cell_size/2).T
-        self.cell_centers = np.stack(np.meshgrid(xx, yy, zz, indexing="ij"), -1)
-
-        self.is_obstacle = np.zeros(self.cell_centers.shape[:3], dtype=bool)
-        map_config["obstacles"]["box"] += [
-            [min_xyz[0]-0.1, 0, 1, 0.1, max_xyz[1], 1],
-            [0, max_xyz[1]+0.1, 1, max_xyz[0], 0.1, 1],
-            [max_xyz[0]+0.1, 0, 1, 0.1, max_xyz[1], 1],
-            [0, min_xyz[1]-0.1, 1, max_xyz[0], 0.1, 1]
-        ]
-        for box in map_config["obstacles"]["box"]:
-            center, half_extent = np.split(np.array(box), 2)
-            half_extent += 0.1
-            occupation = np.logical_and(
-                np.all(self.cell_centers >= np.floor((center-half_extent-min_xyz)/cell_size)*cell_size+min_xyz, axis=-1),
-                np.all(self.cell_centers <= np.ceil((center+half_extent-min_xyz)/cell_size)*cell_size+min_xyz, axis=-1))
-            self.is_obstacle[occupation] = True
-        self.max_xyz = max_xyz
-        self.min_xyz = min_xyz
-        self.cell_size = cell_size
+        self.directions = np.array(list(np.ndindex(3, 3, 3))) - 1
+        self.directions = self.directions / (np.linalg.norm(self.directions, axis=1, keepdims=True) + 1e-6)
 
     def __call__(self, states: Dict[int, np.ndarray]) -> Dict[int, np.ndarray]:
-        action = {}
-        for idx, state in states.items():
-            agent_action = np.zeros(7, dtype=np.float32)
-            prey_state, self_state = np.split(state, self.obs_split_sections[:-1])[-2:]
-            pos_prey, pos_self = prey_state[:3], self_state[:3]
-            cell_prey, cell_self = self._pos_to_cell(pos_self*self.max_xyz), self._pos_to_cell(pos_prey*self.max_xyz)
-            if cell_prey!=cell_self:
-                path = self._search_path(cell_self, cell_prey)
-                target_pos = self.cell_centers[path[1]] / self.max_xyz
-                target_vel = target_pos - pos_self
-                target_rpy = xyz2rpy(target_vel, True)
-                agent_action[:3] = target_vel
-                agent_action[3] = 0.5
-                agent_action[4:] = target_rpy
-            else:
-                print("already in the same cell")
-            action[idx] = agent_action
-        return action
+        indices = states.keys()
+        states = np.stack(list(states.values()))
 
-    def _search_path(self, source, target):
-        pos, is_obstacle = self.cell_centers, self.is_obstacle
-        h = lambda x: np.sum(np.abs(pos[target] - pos[x]))
-        d = lambda a, b: np.linalg.norm(pos[a] - pos[b])
-        openset = [(0, source)]
-        came_from = {}
-        g_score = defaultdict(lambda: np.inf)
-        g_score[source] = 0
+        state_prey, state_self = np.split(states, self.obs_split_sections[:-1], axis=-1)[-2:]
+        pos_prey, pos_self = state_prey[:, :3], state_self[:, :3]
+        direction_vector = pos_prey - pos_self
+        distance = np.linalg.norm(direction_vector, axis=-1, keepdims=True)
+        direction_vector /= distance
 
-        while len(openset) > 0:
-            f, current = heapq.heappop(openset)
-            if current == target:
-                path = [current]
-                while current in came_from.keys():
-                    current = came_from[current]
-                    path.append(current)
-                path.reverse()
-                return path
-            for neighbor in current + self.adj:
-                neighbor = tuple(neighbor)
-                try:
-                    if is_obstacle[neighbor] : continue
-                except IndexError: continue
-                t = g_score[current] + d(current, neighbor)
-                if t < g_score[neighbor]:
-                    came_from[neighbor] = current
-                    g_score[neighbor] = t
-                    f = t + h(neighbor)
-                    if (f, neighbor) not in openset:
-                        heapq.heappush(openset, (f, neighbor))
-        return []
-    
-    def _pos_to_cell(self, pos):
-        return tuple(((pos - self.min_xyz) / self.cell_size).astype(int))
+        actions = np.array((self.directions @ direction_vector.T).argmax(0))
+        actions[distance.squeeze() < 0.1] = 13
+
+        return {idx: actions[i] for i, idx in enumerate(indices)}

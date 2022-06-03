@@ -113,7 +113,8 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                          dynamics_attributes=dynamics_attributes
                          )
         #### Set a limit on the maximum target speed ###############
-        self.SPEED_LIMIT = 0.03 * self.MAX_SPEED_KMH * (1000/3600) * 3
+        self.SPEED_LIMIT = 0.09 * self.MAX_SPEED_KMH * (1000/3600)
+        self.SPEED_SCALE = np.ones(self.NUM_DRONES)
         self.MAX_PHY_STEPS = self.EPISODE_LEN_SEC * self.SIM_FREQ
         self.cameras = [Camera()]
 
@@ -239,7 +240,7 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                                                         cur_ang_vel=state[13:16],
                                                         target_pos=state[0:3], # same as the current position
                                                         target_rpy=np.array([0,0,state[9]]), # keep current yaw
-                                                        target_vel=self.SPEED_LIMIT * np.abs(v[3]) * v_unit_vector # target the desired velocity vector
+                                                        target_vel=self.SPEED_LIMIT * np.abs(v[3]) * v_unit_vector * self.SPEED_SCALE[k] # target the desired velocity vector
                                                         )
                 rpm[int(k),:] = temp
             elif self.ACT_TYPE == ActionType.ONE_D_RPM: 
@@ -281,7 +282,7 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                     control_timestep=self.AGGR_PHY_STEPS*self.TIMESTEP, 
                     state=self._getDroneStateVector(k),
                     target_pos=self.pos[k],
-                    target_vel= vel_d * abs(speed) * self.SPEED_LIMIT,
+                    target_vel= vel_d * abs(speed) * self.SPEED_LIMIT * self.SPEED_SCALE[k],
                     target_rpy=ori_rpy,
                 )[0]
             elif self.ACT_TYPE == ActionType.VEL_RPY_QUAT:
@@ -292,7 +293,7 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                     control_timestep=self.AGGR_PHY_STEPS*self.TIMESTEP,
                     state=self._getDroneStateVector(k),
                     target_pos=self.pos[k],
-                    target_vel= vel_d * abs(speed) * self.SPEED_LIMIT,
+                    target_vel= vel_d * abs(speed) * self.SPEED_LIMIT * self.SPEED_SCALE[k],
                     target_rpy=ori_rpy,
                 )[0]
             else:
