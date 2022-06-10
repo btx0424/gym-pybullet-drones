@@ -96,12 +96,12 @@ class OccupationAviary_empty(BaseMultiagentAviary):
                 self._clipAndNormalizeXYZ(half_extents)[0]
             self.obstacles['box'] = (box_centers, half_extents)
 
-    def reset(self, init_xyzs="random", init_rpys=None):
+    def reset(self, init_task=None, init_xyzs="random", init_rpys=None):
         self.timestep = 0
         if isinstance(init_xyzs, np.ndarray):
             self.INIT_XYZS = init_xyzs
-            # self.goals[:,0:3] = self.INIT_XYZS + 0.1
-            self.goals[:,0:3] = np.array([[0.5,0.5,1.0],[0.5,0.5,0.5]])
+            self.goals[:,0:3] = self.INIT_XYZS + 0.1
+            # self.goals[:,0:3] = np.array([[0.5,0.5,1.0],[0.5,0.5,0.5]])
         elif init_xyzs == "random": 
             if self.fixed_height:
                 self.grid_centers[:,2] = 1.0
@@ -113,11 +113,23 @@ class OccupationAviary_empty(BaseMultiagentAviary):
             self.goals_init = self.grid_centers[sample_goal_idx]
             self.goals[:,0:3] = self.goals_init / self.MAX_XYZ
         if init_rpys is not None: self.INIT_RPYS = init_rpys
+        # set task by init_task
+        if init_task is not None:
+            self.INIT_XYZS = init_task[:self.num_agents * 3].reshape(self.num_agents,-1)
+            self.goals[:,0:3] = init_task[self.num_agents * 3: (self.num_agents + self.num_goals) * 3].reshape(self.num_goals,-1)
         obs = super().reset()
         self.episode_reward = np.zeros(self.num_agents)
         self.collision_penalty = np.zeros(self.NUM_DRONES)
         self.alive = np.ones(self.NUM_DRONES, dtype=bool)
-        return obs
+
+        # return task configuration
+        task = []
+        task.append(self.INIT_XYZS.reshape(-1))
+        task.append(self.goals[:,0:3].reshape(-1))
+        infos =[]
+        for i in range(self.num_agents):
+            infos.append({'tasks': np.concatenate(task)})
+        return obs, infos
     
     def _observationSpace(self) -> spaces.Dict:
         # TODO@Botian: 1. how to split? 2. differentiate predators and preys
@@ -141,6 +153,13 @@ class OccupationAviary_empty(BaseMultiagentAviary):
         if self.observe_obstacles:
             boxes = np.concatenate(self.obstacles['box'], axis=1).flatten()
         goals = np.concatenate(self.goals)
+
+        # set task
+        self.step_task = []
+        self.step_task.append(states.flatten())
+        self.step_task.append(goals)
+        self.step_task = np.concatenate(self.step_task)
+
         # TODO@Botian: assym obs?
         for i in self.predators:
             others = np.arange(self.NUM_DRONES) != i
@@ -198,8 +217,8 @@ class OccupationAviary_empty(BaseMultiagentAviary):
     
     def _computeInfo(self):
         info = super()._computeInfo()
-        # for i in range(self.num_agents):
-        #     info[i]["collision_penalty"] = -int(self.drone_collision[i])
+        for i in range(self.num_agents):
+            info[i]["tasks"] = self.step_task.copy()
         return info
 
     # TODO@jiayu, rejection placement for obstacles and goals
@@ -229,7 +248,6 @@ class OccupationAviary_empty(BaseMultiagentAviary):
                 basePosition=center*self.MAX_XYZ)
 
     def step(self, action):
-        print('action', action)
         obs, reward, done, info = super().step(action)
         self.episode_reward += reward
         self.timestep = (self.timestep + 1) % self.global_max_steps
