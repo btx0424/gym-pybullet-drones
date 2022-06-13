@@ -119,6 +119,7 @@ class PredatorPreyAviary(BaseMultiagentAviary):
                          max_xyz=self.map_config["map"]["max_xyz"],
                          min_xyz=self.map_config["map"]["min_xyz"])
         self.num_agents = self.NUM_DRONES
+        self.global_max_steps = self.MAX_PHY_STEPS // self.AGGR_PHY_STEPS
 
         if 'obstacles' in self.map_config.keys():
             if 'box' in self.obstacles.keys():
@@ -135,6 +136,8 @@ class PredatorPreyAviary(BaseMultiagentAviary):
                 self.obstacles['cylinder'] = (cylinder_centers, radiuses)
 
     def reset(self, init_xyzs="random", init_rpys=None):
+        self.timestep = 0
+        self.exe_time = self.global_max_steps
         if isinstance(init_xyzs, np.ndarray):
             self.INIT_XYZS = init_xyzs
         elif init_xyzs == "random": 
@@ -203,14 +206,24 @@ class PredatorPreyAviary(BaseMultiagentAviary):
         
         reward = np.zeros(self.NUM_DRONES)
         min_distance = distance.min(1).flatten() # (num_prey,)
-        reward_predators = 1 / (1 + min_distance)**2
-        reward_preys = np.exp(-min_distance)
+        reward_predators = - min_distance
+        reward_preys = min_distance
+        if min_distance > 0.2 and min_distance < 0.5:
+            self.success = 1
+        else:
+            self.success = 0
+
+        if self.success == 1:
+            self.exe_time = min(self.timestep, self.exe_time)
+
+        reward_predators += self.success * 10
+        reward_preys -= self.success * 10
         reward[self.predators] = np.sum(in_sight.any(1) * reward_predators) / self.num_predators
         reward[self.preys] = -np.sum(in_sight.any(1) * reward_preys) / self.num_preys
         
         # collision_penalty
         self.drone_collision = np.array([len(p.getContactPoints(bodyA=drone_id))>0 for drone_id in self.DRONE_IDS])
-        reward -= self.drone_collision.astype(np.float32)
+        reward -= self.drone_collision.astype(np.float32) * 5
 
         self.episode_reward += reward
         self.collision_penalty += self.drone_collision.astype(np.float32)
@@ -255,6 +268,7 @@ class PredatorPreyAviary(BaseMultiagentAviary):
 
     def step(self, action):
         obs, reward, done, info = super().step(action)
+        self.timestep = (self.timestep + 1) % self.global_max_steps
         return obs, reward, done, info
 
     def render(self, mode="camera"):
