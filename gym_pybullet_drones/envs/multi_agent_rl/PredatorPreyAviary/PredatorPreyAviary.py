@@ -13,7 +13,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.patches import Rectangle, Circle
 
-# from termcolor import colored
+from termcolor import colored
 
 def in_sight_test(from_pos, to_pos, ori, fov, to_id, vision_range):
     d = to_pos[:, None] - from_pos # (n_prey, n_predators, 3)
@@ -451,7 +451,7 @@ def test_predator_aviary(prey_policy="fixed", act=ActionType.VEL_RPY_EULER):
     env = PredatorAviary(
         num_predators=2, num_preys=1,
         aggregate_phy_steps=4, episode_len_sec=20, 
-        map_config="arena", prey_policy=prey_policy, act=act)
+        map_config="mini_arena", prey_policy=prey_policy, act=act)
     print("obs_split_shapes", env.obs_split_shapes)
     print("obs_split_sections:", env.obs_split_sections)
     print("action_space:", env.action_space)
@@ -468,7 +468,8 @@ def test_predator_aviary(prey_policy="fixed", act=ActionType.VEL_RPY_EULER):
         obs, reward, done, info = env.step(action)
         reward_total += sum(reward)
         if np.all(done): break
-        if i % 4 == 0: frames.append(env.render("mini_map"))
+        # if i % 4 == 0: frames.append(env.render("mini_map"))
+        if i % 4 == 0: frames.append(env.render("camera"))
     
     env.close()
     imageio.mimsave(
