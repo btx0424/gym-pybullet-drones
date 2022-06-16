@@ -53,8 +53,8 @@ class OccupationAviary_empty(BaseMultiagentAviary):
 
         # set goals
         self.num_goals = num_agents
-        self.goal_size = 0.1 # relative value
-        self.goals = np.zeros(shape=(self.num_goals, 4)) # relative pos + size
+        self.goal_size = 0.1 # absolute
+        self.goals = np.zeros(shape=(self.num_goals, 4)) # relabsoluteative pos + size
         self.goals[:,3:] = self.goal_size
 
         map_config = map_config or "square"
@@ -98,10 +98,10 @@ class OccupationAviary_empty(BaseMultiagentAviary):
 
     def reset(self, init_task=None, init_xyzs="random", init_rpys=None):
         self.timestep = 0
+        # self.INIT_XYZS : absolute pos
         if isinstance(init_xyzs, np.ndarray):
             self.INIT_XYZS = init_xyzs
             self.goals[:,0:3] = self.INIT_XYZS + 0.1
-            # self.goals[:,0:3] = np.array([[0.5,0.5,1.0],[0.5,0.5,0.5]])
         elif init_xyzs == "random": 
             if self.fixed_height:
                 self.grid_centers[:,2] = 1.0
@@ -110,8 +110,7 @@ class OccupationAviary_empty(BaseMultiagentAviary):
             self.INIT_XYZS = self.grid_centers[sample_pos_idx]
             # init goal
             sample_goal_idx = self.rng.choice(self.avail, self.num_goals, replace=False)
-            self.goals_init = self.grid_centers[sample_goal_idx]
-            self.goals[:,0:3] = self.goals_init / self.MAX_XYZ
+            self.goals[:,0:3] = self.grid_centers[sample_goal_idx]
         if init_rpys is not None: self.INIT_RPYS = init_rpys
         # set task by init_task
         if init_task is not None:
@@ -154,10 +153,10 @@ class OccupationAviary_empty(BaseMultiagentAviary):
             boxes = np.concatenate(self.obstacles['box'], axis=1).flatten()
         goals = np.concatenate(self.goals)
 
-        # set task
+        # get info task
         self.step_task = []
-        self.step_task.append(states.flatten())
-        self.step_task.append(goals)
+        self.step_task.append(self.pos.reshape(-1))
+        self.step_task.append(self.goals[:,0:3].reshape(-1))
         self.step_task = np.concatenate(self.step_task)
 
         # TODO@Botian: assym obs?
@@ -174,7 +173,7 @@ class OccupationAviary_empty(BaseMultiagentAviary):
 
     def _computeReward(self):
         drone_pos = self.pos[self.predators] # absolute
-        goals_pos = self.goals[:,0:3] * self.MAX_XYZ # np.max(self.MAX_XYZ)
+        goals_pos = self.goals[:,0:3] # np.max(self.MAX_XYZ)
         rewards = np.zeros(self.NUM_DRONES)
         success = 0
         success_reward = 0
@@ -239,13 +238,13 @@ class OccupationAviary_empty(BaseMultiagentAviary):
         for center, half_extent in zip(self.goals[:,:3],self.goals[:,3]):
             visualShapeId = p.createVisualShape(
                 shapeType=p.GEOM_SPHERE, 
-                radius=half_extent * np.max(self.MAX_XYZ),
+                radius=half_extent,
                 rgbaColor=[0.5,0.5,0.5,0.5])
             # collisionShapeId = p.createCollisionShape(
             #     shapeType=p.GEOM_BOX, halfExtents=half_extent*self.MAX_XYZ)
             p.createMultiBody(
                 baseVisualShapeIndex=visualShapeId,
-                basePosition=center*self.MAX_XYZ)
+                basePosition=center)
 
     def step(self, action):
         obs, reward, done, info = super().step(action)
@@ -269,8 +268,8 @@ class OccupationAviary_empty(BaseMultiagentAviary):
             #     ax.add_patch(Rectangle(xy, w, h))
             # goals
             for center, half_extent in zip(self.goals[:,:2],self.goals[:,3]):
-                xy =  center * self.MAX_XYZ[:2]
-                w = half_extent * np.max(self.MAX_XYZ)
+                xy = center
+                w = half_extent
                 ax.add_patch(Circle(xy, w))
             ax.set_title(
                 f"step {self.step_counter//self.AGGR_PHY_STEPS} "
