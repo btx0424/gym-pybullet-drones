@@ -208,7 +208,7 @@ class PredatorPreyAviary(BaseMultiagentAviary):
         min_distance = distance.min(1).flatten() # (num_prey,)
         reward_predators = - min_distance
         reward_preys = min_distance
-        if min_distance > 0.2 and min_distance < 0.5:
+        if min_distance > 0.1 and min_distance < 0.2:
             self.success = 1
         else:
             self.success = 0
