@@ -11,7 +11,7 @@ from gym_pybullet_drones.utils import xyz2rpy, rpy2xyz
 from typing import Dict, List, Tuple
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
-from matplotlib.patches import Rectangle, Circle
+from matplotlib.patches import Rectangle, Circle, Wedge
 
 from termcolor import colored
 
@@ -134,15 +134,18 @@ class PredatorPreyAviary(BaseMultiagentAviary):
                     radiuses / self.map_config["map"]["max_xyz"][0]
                 self.obstacles['cylinder'] = (cylinder_centers, radiuses)
 
-    def reset(self, init_xyzs="random", init_rpys=None):
+    def reset(self, init_xyzs="random", init_rpys=None, capture_range=[0.1, 0.4]):
+        self.capture_range = capture_range
         if isinstance(init_xyzs, np.ndarray):
             self.INIT_XYZS = init_xyzs
         elif init_xyzs == "random": 
-            if not hasattr(self, "rng"): self.seed()
             sample_pos_idx = self.rng.choice(self.avail, self.NUM_DRONES, replace=False)
             self.INIT_XYZS = self.grid_centers[sample_pos_idx]
+        elif init_xyzs is None:
+            pass # do nothing
         if init_rpys is not None: self.INIT_RPYS = init_rpys
         obs = super().reset()
+
         self.episode_reward = np.zeros(self.NUM_DRONES)
         self.collision_penalty = np.zeros(self.NUM_DRONES)
         self.alive = np.ones(self.NUM_DRONES, dtype=bool)
@@ -151,13 +154,30 @@ class PredatorPreyAviary(BaseMultiagentAviary):
     
     def _observationSpace(self) -> spaces.Dict:
         self.obs_split_shapes = [[1,1]] # time
+        self.object_indices = {}
+        obj_count = 1
         if self.observe_obstacles: 
-            if 'box' in self.obstacles.keys(): self.obs_split_shapes.append([len(self.obstacles['box'][0]), 6])
-            if 'cylinder' in self.obstacles.keys(): self.obs_split_shapes.append([len(self.obstacles['cylinder'][0]), 4])
+            if 'box' in self.obstacles.keys(): 
+                num_boxes = len(self.obstacles['box'][0])
+                self.obs_split_shapes.append([num_boxes, 6])
+                self.object_indices["box"] = np.arange(obj_count, obj_count+num_boxes)
+                obj_count += num_boxes
+            if 'cylinder' in self.obstacles.keys(): 
+                num_cylinders = len(self.obstacles['cylinder'][0])
+                self.obs_split_shapes.append([num_cylinders, 4])
+                self.object_indices["cylinder"] = np.arange(obj_count, obj_count+num_cylinders)
+                obj_count += num_cylinders
         state_size = 12 if self.OBS_TYPE == ObservationType.KIN else 20
+        # predators
         self.obs_split_shapes.append([self.num_predators, state_size])
+        self.object_indices["predator"] = np.arange(obj_count, obj_count+self.num_predators)
+        obj_count += self.num_predators
+        # preys
         self.obs_split_shapes.append([self.num_preys, state_size])
+        self.object_indices["prey"] = np.arange(obj_count, obj_count+self.num_preys)
+        # self
         self.obs_split_shapes.append([1, state_size])
+        
         self.obs_split_sections = np.cumsum(
             np.concatenate([[dim]*num for num, dim in self.obs_split_shapes]))
         shape = self.obs_split_sections[-1]
@@ -204,11 +224,11 @@ class PredatorPreyAviary(BaseMultiagentAviary):
         reward = np.zeros(self.NUM_DRONES)
         min_distance = distance.min(1).flatten() # (num_prey,)
         reward_predators = 1 / (1 + min_distance)**2
-        captured = (0.2 < min_distance) & (min_distance < 0.4) 
+        captured = (self.capture_range[0] < min_distance) & (min_distance < self.capture_range[1]) 
         # reward_predators +=  captured.astype(np.float32) # bonus for capturing
         reward_preys = - reward_predators
         reward[self.predators] = np.sum(reward_predators) / self.num_predators
-        reward[self.preys] = -np.sum(reward_preys) / self.num_preys
+        reward[self.preys] = np.sum(reward_preys) / self.num_preys
         
         # collision_penalty
         self.drone_collision = np.array([len(p.getContactPoints(bodyA=drone_id))>0 for drone_id in self.DRONE_IDS])
@@ -278,12 +298,14 @@ class PredatorPreyAviary(BaseMultiagentAviary):
             if 'cylinder' in self.obstacles.keys():
                 for center, radius in zip(*self.obstacles['cylinder']):
                     ax.add_patch(Circle(center[:2] * self.MAX_XYZ[:2], radius*self.MAX_XYZ[0]))
+            for pos in self.pos[self.predators]:
+                ax.add_patch(Wedge(pos[:2], self.capture_range[1], 0, 360, self.capture_range[1]-self.capture_range[0], color="orange", alpha=0.3))
             ax.set_title(
                 f"step {self.step_counter//self.AGGR_PHY_STEPS} "
                 +f"predator_r: {np.sum(self.episode_reward[self.predators]):.0f} "
                 +f"prey_r: {np.sum(self.episode_reward[self.preys]):.0f} ")
-            ax.set_xlim(self.MIN_XYZ[0], self.MAX_XYZ[0])
-            ax.set_ylim(self.MIN_XYZ[1], self.MAX_XYZ[1])
+            ax.set_xlim(self.MIN_XYZ[0]*1.2, self.MAX_XYZ[0]*1.2)
+            ax.set_ylim(self.MIN_XYZ[1]*1.2, self.MAX_XYZ[1]*1.2)
             buffer, (width, height) = canvas.print_to_buffer()
             return np.frombuffer(buffer, np.uint8).reshape(height, width, -1)
         else:
@@ -295,7 +317,6 @@ class PredatorAviary(PredatorPreyAviary):
             num_preys: int = 1,
             fov: float = np.pi / 2, 
             vision_range: float=np.inf,
-            prey_policy: str = "fixed",
             *, 
             map_config = None,
             drone_model: DroneModel = DroneModel.CF2X, 
@@ -315,16 +336,6 @@ class PredatorAviary(PredatorPreyAviary):
         
         self.num_agents = len(self.predators)
         self.waypoints = np.array(self.map_config['prey']['waypoints'])
-        if prey_policy == "fixed":
-            self.prey_policy = WayPointPolicy(
-                waypoints=self._clipAndNormalizeXYZ(self.waypoints)[0],
-                obs_split_sections=self.obs_split_sections,
-                act_type=self.ACT_TYPE,
-            )
-        elif prey_policy == "rule":
-            self.prey_policy = RulePreyPolicy(
-                self.map_config, self.predators, self.preys, self.obs_split_sections
-            )
 
     def _actionSpace(self) -> spaces.Dict:
         action_space = super()._actionSpace()
@@ -339,14 +350,31 @@ class PredatorAviary(PredatorPreyAviary):
         self.prey_action = self.prey_policy({self.prey: obs[self.prey]})
         return {i: obs[i] for i in self.predators}
 
-    def reset(self):
-        if not hasattr(self, "rng"): self.seed()
-        init_xyzs = self.INIT_XYZS.copy()
-        init_xyzs[-1] = self.waypoints[0]
-        sample_pos_idx = self.rng.choice(self.avail, self.num_predators, replace=False)
-        init_xyzs[:-1] = self.grid_centers[sample_pos_idx]
+    def reset(self, init_xyzs=None, init_rpys=None, prey_policy="fixed", prey_speed=1., capture_range=[0.1, 0.4], seed=None):
+        if not hasattr(self, "rng") or seed is not None: self.seed(seed)
+        assert init_xyzs == "random" or isinstance(init_xyzs,  np.ndarray) or init_xyzs is None
+        if init_xyzs is None: init_xyzs = self.INIT_XYZS
+        if prey_policy == "fixed":
+            if isinstance(init_xyzs, str) and init_xyzs ==  "random":
+                sample_pos_idx = self.rng.choice(self.avail, self.NUM_DRONES, replace=False)
+                init_xyzs = self.grid_centers[sample_pos_idx]
+            init_xyzs[-1] = self.waypoints[0] # TODO @Botian: support multiple preys ...
+            self.prey_policy = WayPointPolicy(
+                waypoints=self._clipAndNormalizeXYZ(self.waypoints)[0],
+                obs_split_sections=self.obs_split_sections,
+                act_type=self.ACT_TYPE,
+                speed=prey_speed
+            )
+        elif prey_policy == "rule":
+            self.prey_policy= self.prey_policy = RulePreyPolicy(
+                map_config=self.map_config, object_indices=self.object_indices, 
+                obs_split_sections=self.obs_split_sections, act_type=self.ACT_TYPE,
+                speed=prey_speed
+            )
+        else:
+            raise NotImplementedError(prey_policy)
         self.prey_policy.reset()
-        obs = super().reset(init_xyzs)
+        obs = super().reset(init_xyzs, init_rpys, capture_range)
         return {i: obs[i] for i in self.predators}
 
     def step(self, actions: Dict[int, np.ndarray]):
@@ -394,13 +422,40 @@ class DiscreteActionWrapper(gym.ActionWrapper):
         return {i: vel_action[i] for i in range(self.num_agents)}
 
 class MultiDiscreteWrapper(gym.ActionWrapper):
-    def __init__(self, env, max_speed=1., speed_split_num=5, mix=1.) -> None:
+    def __init__(self, env, mix=1., speed=0.75) -> None:
+        super().__init__(env)
+        self.action_space = [spaces.MultiDiscrete([3, 3, 3])] * self.num_agents
+        self.mix = mix
+        self.speed = speed
+
+    def reset(self, *args, **kwargs):
+        if self.ACT_TYPE == ActionType.VEL or self.ACT_TYPE == ActionType.VEL_ALIGNED:
+            self._last_action = np.zeros((self.num_agents, 4))
+        elif self.ACT_TYPE == ActionType.VEL_RPY_EULER:
+            self._last_action = np.zeros((self.num_agents, 7))
+        return super().reset(*args, **kwargs)
+
+    def action(self, action: Dict):
+        action = np.array(list(action.values()))
+        if self.ACT_TYPE == ActionType.VEL or self.ACT_TYPE == ActionType.VEL_ALIGNED:
+            vel_action = np.zeros((len(action), 4))
+        elif self.ACT_TYPE == ActionType.VEL_RPY_EULER: 
+            vel_action = np.zeros((self.num_agents, 7))
+            vel_action[:, 4:6] = action[:2] - 1 # leave z as 0
+        vel_action[:, 3] = self.speed
+        vel_action[:, :3] = action - 1 # (0, 2) -> (-1, 1)
+        
+        self._last_action = vel_action = vel_action * self.mix + self._last_action * (1 - self.mix)
+        return {i: vel_action[i] for i in range(self.num_agents)}
+
+class MultiDiscreteVelWrapper(gym.ActionWrapper):
+    def __init__(self, env, speed_split_num=5, mix=1.) -> None:
         super().__init__(env)
         self.directions = np.array(list(np.ndindex(3, 3, 3))) - 1
-        self.max_speed = max_speed
         self.speed_split_num = speed_split_num
         self.mix = mix
         self.action_space = [spaces.MultiDiscrete([27, self.speed_split_num])] * self.num_agents
+        self.quantized_speed = np.linspace(0, 1, self.speed_split_num)
 
     def reset(self, *args, **kwargs):
         if self.ACT_TYPE == ActionType.VEL:
@@ -420,8 +475,7 @@ class MultiDiscreteWrapper(gym.ActionWrapper):
             vel_action[:, 4:6] = self.directions[action_dir][:, :2] # leave z as 0
             # vel_action[:, -1] = xyz2rpy(self.directions[action_dir], True)[-1] # only take yaw
 
-        quantized_speed = np.linspace(0, self.max_speed, self.speed_split_num)
-        vel_action[:, 3] = quantized_speed[action_vel]
+        vel_action[:, 3] = self.quantized_speed[action_vel]
 
         ## vector repr.of direction
         vel_action[:, :3] = self.directions[action_dir]
@@ -501,19 +555,19 @@ def test_env():
     print(reward_total, done)
 
 @test
-def test_predator_aviary(
-        prey_policy="fixed", act=ActionType.VEL_RPY_EULER):
+def test_predator_aviary(prey_policy="fixed", act=ActionType.VEL_RPY_EULER):
     env = PredatorAviary(
         num_predators=2, num_preys=1,
         aggregate_phy_steps=4, episode_len_sec=20, 
-        map_config="arena", prey_policy=prey_policy, act=act)
+        map_config="arena", act=act)
     print("obs_split_shapes", env.obs_split_shapes)
     print("obs_split_sections:", env.obs_split_sections)
     print("action_space:", env.action_space)
     
-    predator_policy = VelDummyPolicy(env.obs_split_sections, speed=0.9, act_type=env.ACT_TYPE)
+    predator_policy = VelDummyPolicy(env.obs_split_sections, speed=0.01, act_type=env.ACT_TYPE)
 
-    obs = env.reset()
+    obs = env.reset(init_xyzs="random", prey_policy=prey_policy)
+
     frames = []
     reward_total = 0
     
@@ -580,8 +634,9 @@ if __name__ == "__main__":
     # test_predator_aviary(prey_policy="fixed", act=ActionType.VEL_RPY_EULER)
     # test_predator_aviary(prey_policy="fixed", act=ActionType.VEL_RPY_QUAT)
 
-    test_discrete_action(act=ActionType.VEL)
-    test_discrete_action(act=ActionType.VEL_RPY_EULER)
+    test_predator_aviary(prey_policy="rule", act=ActionType.VEL_ALIGNED)
+    # test_discrete_action(act=ActionType.VEL)
+    # test_discrete_action(act=ActionType.VEL_RPY_EULER)
 
     # env = PredatorAviary(num_predators=1, num_preys=1,
     #     aggregate_phy_steps=4, episode_len_sec=20, 

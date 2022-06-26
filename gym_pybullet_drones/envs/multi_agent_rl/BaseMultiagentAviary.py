@@ -89,7 +89,7 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
         self.MAX_XYZ = np.array(max_xyz)
         self.MIN_XYZ = np.array(min_xyz)
         #### Create integrated controllers #########################
-        if act in [ActionType.PID, ActionType.VEL, ActionType.ONE_D_PID, ActionType.VEL_RPY_EULER, ActionType.VEL_RPY_QUAT]:
+        if act in [ActionType.PID, ActionType.VEL, ActionType.VEL_ALIGNED, ActionType.ONE_D_PID, ActionType.VEL_RPY_EULER, ActionType.VEL_RPY_QUAT]:
             os.environ['KMP_DUPLICATE_LIB_OK']='True'
             if drone_model in [DroneModel.CF2X, DroneModel.CF2P]:
                 self.ctrl = [DSLPIDControl(drone_model=DroneModel.CF2X) for i in range(num_drones)]
@@ -159,7 +159,7 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
             indexed by drone Id in integer format.
 
         """
-        if self.ACT_TYPE in [ActionType.RPM, ActionType.DYN, ActionType.VEL]:
+        if self.ACT_TYPE in [ActionType.RPM, ActionType.DYN, ActionType.VEL, ActionType.VEL_ALIGNED]:
             size = 4
         elif self.ACT_TYPE==ActionType.PID:
             size = 3
@@ -240,6 +240,19 @@ class BaseMultiagentAviary(BaseAviary, MultiAgentEnv):
                                                         cur_ang_vel=state[13:16],
                                                         target_pos=state[0:3], # same as the current position
                                                         target_rpy=np.array([0,0,state[9]]), # keep current yaw
+                                                        target_vel=self.SPEED_LIMIT * np.abs(v[3]) * v_unit_vector * self.SPEED_SCALE[k] # target the desired velocity vector
+                                                        )
+                rpm[int(k),:] = temp
+            elif self.ACT_TYPE == ActionType.VEL_ALIGNED:
+                state = self._getDroneStateVector(k)
+                v_unit_vector = v[0:3] / (np.linalg.norm(v[0:3])+1e-6)
+                temp, _, _ = self.ctrl[int(k)].computeControl(control_timestep=self.AGGR_PHY_STEPS*self.TIMESTEP, 
+                                                        cur_pos=state[0:3],
+                                                        cur_quat=state[3:7],
+                                                        cur_vel=state[10:13],
+                                                        cur_ang_vel=state[13:16],
+                                                        target_pos=state[0:3], # same as the current position
+                                                        target_rpy=np.array([0,0,xyz2rpy(v_unit_vector)[2]]),
                                                         target_vel=self.SPEED_LIMIT * np.abs(v[3]) * v_unit_vector * self.SPEED_SCALE[k] # target the desired velocity vector
                                                         )
                 rpm[int(k),:] = temp

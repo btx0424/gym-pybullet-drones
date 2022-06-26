@@ -56,6 +56,7 @@ class ActionType(Enum):
     ONE_D_PID = "one_d_pid"     # 1D (identical input to all motors) with PID control
     VEL_RPY_EULER = "vel_rpy_euler"
     VEL_RPY_QUAT = "vel_rpy_quat"
+    VEL_ALIGNED  = "vel_aligned"
 
 ################################################################################
 
