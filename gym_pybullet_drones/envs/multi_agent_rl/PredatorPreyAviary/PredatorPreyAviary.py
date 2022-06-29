@@ -134,7 +134,7 @@ class PredatorPreyAviary(BaseMultiagentAviary):
                     radiuses / self.map_config["map"]["max_xyz"][0]
                 self.obstacles['cylinder'] = (cylinder_centers, radiuses)
 
-    def reset(self, init_xyzs="random", init_rpys=None, capture_range=[0.1, 0.4]):
+    def reset(self, init_xyzs="random", init_rpys=None, capture_range=[0.2, 0.5]):
         self.capture_range = capture_range
         if isinstance(init_xyzs, np.ndarray):
             self.INIT_XYZS = init_xyzs
@@ -402,7 +402,7 @@ class DiscreteActionWrapper(gym.ActionWrapper):
         self.speed = speed
 
     def reset(self, *args, **kwargs):
-        if self.ACT_TYPE == ActionType.VEL:
+        if self.ACT_TYPE == ActionType.VEL or self.ACT_TYPE == ActionType.VEL_ALIGNED:
             self._last_action = np.zeros((self.num_agents, 4))
         elif self.ACT_TYPE == ActionType.VEL_RPY_EULER:
             self._last_action = np.zeros((self.num_agents, 7))
@@ -410,7 +410,7 @@ class DiscreteActionWrapper(gym.ActionWrapper):
 
     def action(self, action: Dict):
         action = np.array(list(action.values())).flatten()
-        if self.ACT_TYPE == ActionType.VEL:
+        if self.ACT_TYPE == ActionType.VEL or self.ACT_TYPE == ActionType.VEL_ALIGNED:
             vel_action = np.zeros((len(action), 4))
         elif self.ACT_TYPE == ActionType.VEL_RPY_EULER: 
             vel_action = np.zeros((self.num_agents, 7))
