@@ -393,34 +393,6 @@ class PredatorAviary(PredatorPreyAviary):
         info = super()._computeInfo()
         return info[self.predators]
 
-class DiscreteActionWrapper(gym.ActionWrapper):
-    def __init__(self, env, mix=1., speed=0.75) -> None:
-        super().__init__(env)
-        self.action_space = [spaces.Discrete(27)] * self.num_agents
-        self.directions = np.array(list(np.ndindex(3, 3, 3))) - 1
-        self.mix = mix
-        self.speed = speed
-
-    def reset(self, *args, **kwargs):
-        if self.ACT_TYPE == ActionType.VEL or self.ACT_TYPE == ActionType.VEL_ALIGNED:
-            self._last_action = np.zeros((self.num_agents, 4))
-        elif self.ACT_TYPE == ActionType.VEL_RPY_EULER:
-            self._last_action = np.zeros((self.num_agents, 7))
-        return super().reset(*args, **kwargs)
-
-    def action(self, action: Dict):
-        action = np.array(list(action.values())).flatten()
-        if self.ACT_TYPE == ActionType.VEL or self.ACT_TYPE == ActionType.VEL_ALIGNED:
-            vel_action = np.zeros((len(action), 4))
-        elif self.ACT_TYPE == ActionType.VEL_RPY_EULER: 
-            vel_action = np.zeros((self.num_agents, 7))
-            vel_action[:, 4:6] = self.directions[action][:, :2] # leave z as 0
-        vel_action[:, 3] = self.speed
-        vel_action[:, :3] = self.directions[action]
-        
-        self._last_action = vel_action = vel_action * self.mix + self._last_action * (1 - self.mix)
-        return {i: vel_action[i] for i in range(self.num_agents)}
-
 class MultiDiscreteWrapper(gym.ActionWrapper):
     def __init__(self, env, mix=1., speed=0.75) -> None:
         super().__init__(env)
