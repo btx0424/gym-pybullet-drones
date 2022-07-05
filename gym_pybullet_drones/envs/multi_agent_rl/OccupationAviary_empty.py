@@ -183,7 +183,7 @@ class OccupationAviary_empty(BaseMultiagentAviary):
             distance_reward -= min(dists)
             
             # success reward
-            if min(dists) <= self.goal_size * np.max(self.MAX_XYZ):
+            if min(dists) <= self.goal_size:
                 success_reward += 10
                 success += 1
         # share_reward

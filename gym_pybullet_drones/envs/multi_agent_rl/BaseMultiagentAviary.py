@@ -407,7 +407,7 @@ class Camera:
     CAMERA_COUNT = 0
     def __init__(self, 
         width=640, height=480, fov=60,
-        eye_pos=[-3, 0, 3], target_pos=[0, 0, 0.2], up=[0, 0, 1], name=None):
+        eye_pos=[-3, 0, 1], target_pos=[0, 0, 0.2], up=[0, 0, 1], name=None):
         if name is None:
             name = f"cam_{Camera.CAMERA_COUNT}"
             Camera.CAMERA_COUNT += 1
